@@ -339,7 +339,7 @@ LogoL.Size=UDim2.new(0,100,1,-2); LogoL.RichText=true
 local BadgeF = Frame(TBar, UDim2.new(0,60,0,isMobile and 18 or 16),
     UDim2.new(0,108,0.5,isMobile and -9 or -8), C.bg3, 3)
 Stroke(BadgeF, C.brd2, 1)
-Lbl(BadgeF, "v2.2", 8, C.txt2, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
+Lbl(BadgeF, "v2.3", 8, C.txt2, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
 
 local bSz = isMobile and 34 or 28
 
@@ -379,15 +379,63 @@ local OBClick = Btn(OpenBtn, UDim2.new(1,0,1,0), UDim2.new(0,0,0,0), C.bg0, 8)
 OBClick.BackgroundTransparency=1
 
 -- ════════════════════════════════════════════════════════
+-- CUSTOM CURSOR
+-- Shown only while the menu is open. DisplayOrder is max so
+-- it always renders above every GUI, including in-game UIs.
+-- MouseIconEnabled is forced off every RenderStepped to fight
+-- games that override it per-frame.
+-- On mobile (no physical cursor) the system is a no-op.
+-- ════════════════════════════════════════════════════════
+local CursorGui = Instance.new("ScreenGui")
+CursorGui.Name           = "_ZXCHubCursor"
+CursorGui.ResetOnSpawn   = false
+CursorGui.IgnoreGuiInset = true
+CursorGui.DisplayOrder   = 2147483647
+CursorGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+CursorGui.Enabled        = false
+CursorGui.Parent         = CoreGui
+
+local CursorDot = Instance.new("Frame")
+CursorDot.Name                   = "Dot"
+CursorDot.Size                   = UDim2.new(0, 8, 0, 8)
+CursorDot.AnchorPoint            = Vector2.new(0.5, 0.5)
+CursorDot.Position               = UDim2.new(0, 0, 0, 0)
+CursorDot.BackgroundColor3       = Color3.fromRGB(218, 38, 38)
+CursorDot.BorderSizePixel        = 0
+CursorDot.ZIndex                 = 10
+CursorDot.Parent                 = CursorGui
+Instance.new("UICorner", CursorDot).CornerRadius = UDim.new(1, 0)
+
+RunService.RenderStepped:Connect(function()
+    if not CursorGui.Enabled then return end
+    local mp = UIS:GetMouseLocation()
+    CursorDot.Position = UDim2.new(0, mp.X, 0, mp.Y)
+    if UIS.MouseIconEnabled then UIS.MouseIconEnabled = false end
+end)
+
+local function ShowCursor()
+    if isMobile then return end
+    CursorGui.Enabled = true
+    UIS.MouseIconEnabled = false
+end
+
+local function HideCursor()
+    CursorGui.Enabled = false
+    UIS.MouseIconEnabled = true
+end
+
+-- ════════════════════════════════════════════════════════
 -- OPEN / CLOSE
 -- ════════════════════════════════════════════════════════
 local function OpenMenu()
     WIN.Visible=true; OpenBtn.Visible=false; WIN.Size=UDim2.new(0,0,0,0)
     TweenS:Create(WIN, TweenInfo.new(0.28,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
         {Size=UDim2.new(winW,0,winH,0)}):Play()
+    ShowCursor()
 end
 
 local function CloseMenu()
+    HideCursor()
     TweenS:Create(WIN, TweenInfo.new(0.18,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
         {Size=UDim2.new(0,0,0,0)}):Play()
     task.delay(0.20, function()
@@ -1283,7 +1331,7 @@ Frame(Card,UDim2.new(1,0,0,2),UDim2.new(0,0,0,0),C.acc)
 local CLogo=Lbl(Card,'<font color="#D73737">ZXC</font>HUB',isMobile and 24 or 26,C.white,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
 CLogo.Size=UDim2.new(1,0,0,42); CLogo.Position=UDim2.new(0,0,0,14); CLogo.RichText=true
 
-local CVer=Lbl(Card,"v2.2  |  Universal GUI Template",isMobile and 11 or 11,C.txt2,Enum.Font.GothamMedium,Enum.TextXAlignment.Center)
+local CVer=Lbl(Card,"v2.3  |  Universal GUI Template",isMobile and 11 or 11,C.txt2,Enum.Font.GothamMedium,Enum.TextXAlignment.Center)
 CVer.Size=UDim2.new(1,0,0,16); CVer.Position=UDim2.new(0,0,0,58)
 
 Frame(Card,UDim2.new(0.5,0,0,1),UDim2.new(0.25,0,0,84),C.brd)
@@ -1560,7 +1608,8 @@ if autoName~="" then
 end
 
 SetTab(1)
-Toast("ZXCHUB","Menu loaded  v2.2","ok")
+ShowCursor()
+Toast("ZXCHUB","Menu loaded  v2.3","ok")
 
 if #UnsupportedFunctions>0 then
     task.delay(1.8,function()
