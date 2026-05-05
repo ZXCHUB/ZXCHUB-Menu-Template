@@ -134,35 +134,65 @@ local _anyBindWaiting = false
 local UnsupportedFunctions = {}
 local AllFunctions = {}
 
-local function CheckFn(name, fn, desc, cat)
+-- 5th arg (features) is a human-readable string listing which script
+-- features rely on this function, e.g. "Config: Save, Load".
+-- It is shown in the Executor Functions popup under "Used by:".
+-- Pass "" or nil if no current feature depends on it.
+local function CheckFn(name, fn, desc, cat, features)
     local supported = fn ~= nil
-    table.insert(AllFunctions, {name=name, desc=desc, cat=cat or "Other", supported=supported})
+    table.insert(AllFunctions, {name=name, desc=desc, cat=cat or "Other", supported=supported, features=features or ""})
     if not supported then
-        table.insert(UnsupportedFunctions, {name=name, desc=desc, cat=cat or "Other"})
+        table.insert(UnsupportedFunctions, {name=name, desc=desc, cat=cat or "Other", features=features or ""})
     end
 end
 
-CheckFn("readfile",        readfile,        "Read saved config files from disk",           "Filesystem")
-CheckFn("writefile",       writefile,       "Write config files to disk",                  "Filesystem")
-CheckFn("makefolder",      makefolder,      "Create folders for configs",                  "Filesystem")
-CheckFn("isfolder",        isfolder,        "Check if a folder exists",                    "Filesystem")
-CheckFn("isfile",          isfile,          "Check if a file exists",                      "Filesystem")
-CheckFn("listfiles",       listfiles,       "List saved config files",                     "Filesystem")
-CheckFn("delfile",         delfile,         "Delete config files",                         "Filesystem")
-CheckFn("setclipboard",    setclipboard,    "Copy text to clipboard",                      "Clipboard")
+-- HOW TO ADD A NEW FUNCTION CHECK:
+--   CheckFn("yourFnName", yourFnName, "What it does", "Category", "Feature A, Feature B")
+-- Categories: Filesystem | Clipboard | HTTP | Teleport | Drawing | Environment | Execution | Hooking | Metatables
+CheckFn("readfile",        readfile,        "Read saved config files from disk",           "Filesystem",  "Config: Load, Auto-Load")
+CheckFn("writefile",       writefile,       "Write config files to disk",                  "Filesystem",  "Config: Save, Auto-Load")
+CheckFn("makefolder",      makefolder,      "Create folders for configs",                  "Filesystem",  "Config: Save, Load")
+CheckFn("isfolder",        isfolder,        "Check if a folder exists",                    "Filesystem",  "Config: Save, Load")
+CheckFn("isfile",          isfile,          "Check if a file exists",                      "Filesystem",  "Config: Load, Delete")
+CheckFn("listfiles",       listfiles,       "List saved config files",                     "Filesystem",  "Config: List")
+CheckFn("delfile",         delfile,         "Delete config files",                         "Filesystem",  "Config: Delete")
+CheckFn("setclipboard",    setclipboard,    "Copy text to clipboard",                      "Clipboard",   "Credits: Copy Discord")
 CheckFn("request",         request or http_request or (syn and syn.request),
-    "HTTP requests to external servers",                                                    "HTTP")
+    "HTTP requests to external servers",                                                    "HTTP",        "")
 CheckFn("queue_on_teleport",
     queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport),
-    "Run script after server teleport",                                                     "Teleport")
-CheckFn("Drawing",         Drawing,         "Draw 2D shapes over the game",                "Drawing")
-CheckFn("getgenv",         getgenv,         "Access global environment",                   "Environment")
-CheckFn("loadstring",      loadstring,      "Compile and run Lua strings",                 "Execution")
+    "Run script after server teleport",                                                     "Teleport",    "")
+CheckFn("Drawing",         Drawing,         "Draw 2D shapes over the game",                "Drawing",     "")
+CheckFn("getgenv",         getgenv,         "Access global environment",                   "Environment", "")
+CheckFn("loadstring",      loadstring,      "Compile and run Lua strings",                 "Execution",   "")
 CheckFn("hookfunction",
     hookfunction or (debug and debug.sethook),
-    "Hook/intercept function calls",                                                        "Hooking")
+    "Hook/intercept function calls",                                                        "Hooking",     "")
 CheckFn("getrawmetatable", getrawmetatable,
-    "Access raw metatables (bypasses some protections)",                                    "Metatables")
+    "Access raw metatables (bypasses some protections)",                                    "Metatables",  "")
+
+-- ════════════════════════════════════════════════════════
+-- FEATURE GUARDS
+-- Maps each toggle's Flags key → the executor function it
+-- needs. If that function is unsupported and the user tries
+-- to enable the toggle, it flashes ON then auto-disables
+-- and shows ShowUnsupportedNotif().
+--
+-- HOW TO ADD A GUARD FOR A NEW TOGGLE:
+--   1. Make sure the function is registered above with CheckFn().
+--   2. Add:  FeatureGuards["YourFlagKey"] = "functionName"
+--   3. Update the CheckFn() call's features string to mention
+--      which feature uses it (e.g. "Main: Your Feature Name").
+--
+-- Example:
+--   FeatureGuards["AutoSave"] = "writefile"
+-- ════════════════════════════════════════════════════════
+local FeatureGuards = {
+    -- (template has no guarded toggles by default)
+    -- Add your game's feature guards here, e.g.:
+    -- ["AutoKick"]    = "queue_on_teleport",
+    -- ["DrawESP"]     = "Drawing",
+}
 
 -- ════════════════════════════════════════════════════════
 -- CONFIG SYSTEM
@@ -622,6 +652,85 @@ do
 end
 
 -- ════════════════════════════════════════════════════════
+-- UNSUPPORTED FUNCTION NOTIFICATION
+-- Larger than a regular toast; lives for 10 seconds with a
+-- live countdown. Slides in from the top-center.
+-- Called automatically by MakeToggle when a FeatureGuard
+-- fires for a missing function.
+-- ════════════════════════════════════════════════════════
+local function ShowUnsupportedNotif(funcName, featureName)
+    local nW = isMobile and 264 or 308
+    local nH = isMobile and 118 or 106
+
+    local notif = Frame(GUI, UDim2.new(0,nW,0,nH),
+        UDim2.new(0.5,-nW/2,0,-(nH+12)), C.bg0, 10)
+    notif.ZIndex           = 200
+    notif.ClipsDescendants = true
+    Stroke(notif, C.acc, 2)
+    -- Red accent bar across the top
+    Frame(notif, UDim2.new(1,0,0,3), UDim2.new(0,0,0,0), C.acc)
+
+    -- ── Title row ──
+    local titleL = Lbl(notif, "⚠  EXECUTOR DOES NOT SUPPORT THIS",
+        isMobile and 11 or 10, C.acc, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+    titleL.Size     = UDim2.new(1,-16,0,isMobile and 20 or 18)
+    titleL.Position = UDim2.new(0,8,0,isMobile and 9 or 8)
+
+    -- ── Which function / which feature ──
+    local fnLine = Lbl(notif,
+        '"'..funcName..'"  required for:  '..featureName,
+        isMobile and 10 or 10, C.white, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
+    fnLine.Size     = UDim2.new(1,-16,0,isMobile and 16 or 15)
+    fnLine.Position = UDim2.new(0,8,0,isMobile and 32 or 29)
+    fnLine.TextWrapped = true
+
+    -- ── Explanation ──
+    local expL = Lbl(notif,
+        "Your Executor does not support this function",
+        isMobile and 10 or 10, C.txt2, Enum.Font.Gotham, Enum.TextXAlignment.Center)
+    expL.Size     = UDim2.new(1,-16,0,isMobile and 15 or 14)
+    expL.Position = UDim2.new(0,8,0,isMobile and 50 or 46)
+    expL.TextWrapped = true
+
+    -- ── CTA ──
+    local ctaL = Lbl(notif,
+        "Get a better executor:  www.zxchub.com",
+        isMobile and 10 or 9, C.acc, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
+    ctaL.Size     = UDim2.new(1,-16,0,isMobile and 15 or 13)
+    ctaL.Position = UDim2.new(0,8,0,isMobile and 67 or 62)
+    ctaL.TextWrapped = true
+
+    -- ── Countdown badge (bottom-right) ──
+    local cdSz = isMobile and 32 or 28
+    local cdBadge = Frame(notif, UDim2.new(0,cdSz,0,cdSz),
+        UDim2.new(1,-(cdSz+8),1,-(cdSz+8)), C.bg3, cdSz/2)
+    Stroke(cdBadge, C.acc, 1)
+    local cdLbl = Lbl(cdBadge,"10",isMobile and 10 or 9,C.acc,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+
+    local closesL = Lbl(notif,"closes in",
+        isMobile and 9 or 8, C.txt3, Enum.Font.Gotham, Enum.TextXAlignment.Right)
+    closesL.Size     = UDim2.new(0,60,0,isMobile and 13 or 11)
+    closesL.Position = UDim2.new(1,-(cdSz+72),1,-(isMobile and 20 or 18))
+
+    -- ── Slide in ──
+    TweenS:Create(notif, TweenInfo.new(0.32,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+        {Position=UDim2.new(0.5,-nW/2,0,isMobile and 14 or 10)}):Play()
+
+    -- ── Countdown loop + auto-dismiss ──
+    task.spawn(function()
+        for i = 10, 1, -1 do
+            if not notif.Parent then return end
+            cdLbl.Text = tostring(i)
+            task.wait(1)
+        end
+        if not notif.Parent then return end
+        TweenS:Create(notif, TweenInfo.new(0.2,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+            {Position=UDim2.new(0.5,-nW/2,0,-(nH+12))}):Play()
+        task.delay(0.22, function() pcall(function() notif:Destroy() end) end)
+    end)
+end
+
+-- ════════════════════════════════════════════════════════
 -- LAYOUT HELPERS
 -- ════════════════════════════════════════════════════════
 local function MakeScroll(parent)
@@ -694,6 +803,25 @@ local function MakeToggle(parent, text, yOff, flag, callback)
         TweenS:Create(row,TweenInfo.new(0.12),{BackgroundTransparency=1}):Play()
     end)
     cb.MouseButton1Click:Connect(function()
+        -- Check if this feature requires an unsupported executor function.
+        -- FeatureGuards maps flag → required function name (set up near CheckFn calls).
+        local requiredFn = FeatureGuards[flag]
+        if requiredFn then
+            local fnSupported = true
+            for _, fn in ipairs(AllFunctions) do
+                if fn.name == requiredFn then fnSupported = fn.supported; break end
+            end
+            if not fnSupported then
+                -- Flash the toggle ON for 0.35 s, then force it back OFF.
+                Flags[flag] = true;  Refresh()
+                task.delay(0.35, function()
+                    Flags[flag] = false; Refresh()
+                    if callback then callback(false) end
+                end)
+                ShowUnsupportedNotif(requiredFn, text)
+                return
+            end
+        end
         Flags[flag]=not Flags[flag]; Refresh()
         if callback then callback(Flags[flag]) end
     end)
@@ -1432,19 +1560,19 @@ end
 local ys2=8
 ys2=MakeSection(SC2,"Player",ys2)
 
-local pcH=isMobile and 68 or 60
-local PCard=Frame(SC2,UDim2.new(1,-32,0,pcH),UDim2.new(0,16,0,ys2),C.bg3,6)
+local pcH=isMobile and 80 or 70
+local PCard=Frame(SC2,UDim2.new(1,-32,0,pcH),UDim2.new(0,16,0,ys2),C.bg3,8)
 Stroke(PCard,C.brd2,1)
-Frame(PCard,UDim2.new(0,3,1,-8),UDim2.new(0,0,0,4),C.acc,2)
+Frame(PCard,UDim2.new(0,4,1,-14),UDim2.new(0,0,0,7),C.acc,2)
 
-local vpSz=isMobile and 48 or 42
+local vpSz=isMobile and 56 or 50
 local VP=Instance.new("ViewportFrame",PCard)
 VP.Size=UDim2.new(0,vpSz,0,vpSz)
-VP.Position=UDim2.new(0,isMobile and 10 or 8,0.5,-vpSz/2)
+VP.Position=UDim2.new(0,isMobile and 14 or 12,0.5,-vpSz/2)
 VP.BackgroundColor3=C.bg4; VP.BackgroundTransparency=0
 VP.ImageColor3=Color3.fromRGB(255,255,255)
-Instance.new("UICorner",VP).CornerRadius=UDim.new(0,4)
-Stroke(VP,C.brd2,1)
+Instance.new("UICorner",VP).CornerRadius=UDim.new(0,6)
+Stroke(VP,C.acc,1)
 
 local function TryLoadChar()
     for _,ch in ipairs(VP:GetChildren()) do
@@ -1455,31 +1583,32 @@ local function TryLoadChar()
     for _,s in ipairs(clone:GetDescendants()) do
         if s:IsA("BaseScript") then s:Destroy() end
     end
-    clone.Parent=VP
-    local cam=Instance.new("Camera",VP); VP.CurrentCamera=cam
-    local anchor = clone:FindFirstChild("Head")
-                or clone:FindFirstChild("UpperTorso")
-                or clone:FindFirstChild("HumanoidRootPart")
-                or clone:FindFirstChild("Torso")
-    if anchor then
-        cam.CFrame=CFrame.new(anchor.Position+Vector3.new(0,0.5,3.5), anchor.Position+Vector3.new(0,0.5,0))
-    end
+    -- Anchor all parts so they don't fall after scripts are removed
     for _,p in ipairs(clone:GetDescendants()) do
-        if p:IsA("BasePart") then p.CastShadow=false end
+        if p:IsA("BasePart") then p.Anchored=true; p.CastShadow=false end
     end
+    clone.Parent=VP
+    -- Move to world origin so camera placement is always predictable
+    pcall(function() clone:PivotTo(CFrame.new(0,0,0)) end)
+    local cam=Instance.new("Camera",VP); VP.CurrentCamera=cam
+    local head=clone:FindFirstChild("Head")
+    local target=head and head.Position or Vector3.new(0,1.5,0)
+    -- Camera slightly above + in front, framing the face
+    cam.CFrame=CFrame.new(target+Vector3.new(0,0.3,2.6), target+Vector3.new(0,0.05,0))
 end
 
 pcall(TryLoadChar)
 lp.CharacterAdded:Connect(function() task.wait(1); pcall(TryLoadChar) end)
 
-local dnLbl=Lbl(PCard,lp.DisplayName,isMobile and 12 or 13,C.white,Enum.Font.GothamBold)
-dnLbl.Size=UDim2.new(1,-(vpSz+22),0,isMobile and 18 or 18)
-dnLbl.Position=UDim2.new(0,vpSz+(isMobile and 16 or 14),0,isMobile and 8 or 6)
+local tx=vpSz+(isMobile and 18 or 16)
+local dnLbl=Lbl(PCard,lp.DisplayName,isMobile and 13 or 13,C.white,Enum.Font.GothamBold)
+dnLbl.Size=UDim2.new(1,-(tx+10),0,isMobile and 20 or 18)
+dnLbl.Position=UDim2.new(0,tx,0,isMobile and 10 or 9)
 dnLbl.TextXAlignment=Enum.TextXAlignment.Left
 
-local unLbl=Lbl(PCard,"@"..lp.Name,isMobile and 10 or 10,C.txt2,Enum.Font.Gotham)
-unLbl.Size=UDim2.new(1,-(vpSz+22),0,isMobile and 15 or 14)
-unLbl.Position=UDim2.new(0,vpSz+(isMobile and 16 or 14),0,isMobile and 28 or 26)
+local unLbl=Lbl(PCard,"@"..lp.Name,isMobile and 11 or 10,C.txt2,Enum.Font.Gotham)
+unLbl.Size=UDim2.new(1,-(tx+10),0,isMobile and 16 or 15)
+unLbl.Position=UDim2.new(0,tx,0,isMobile and 32 or 29)
 unLbl.TextXAlignment=Enum.TextXAlignment.Left
 
 local execName="Unknown Executor"
@@ -1492,33 +1621,81 @@ elseif writefile then execName="Unknown (writefile OK)"
 end
 
 local exLbl=Lbl(PCard,execName,isMobile and 10 or 9,C.acc,Enum.Font.GothamMedium)
-exLbl.Size=UDim2.new(1,-(vpSz+22),0,isMobile and 14 or 12)
-exLbl.Position=UDim2.new(0,vpSz+(isMobile and 16 or 14),0,isMobile and 44 or 40)
+exLbl.Size=UDim2.new(1,-(tx+10),0,isMobile and 15 or 13)
+exLbl.Position=UDim2.new(0,tx,0,isMobile and 51 or 46)
 exLbl.TextXAlignment=Enum.TextXAlignment.Left
 
 ys2=ys2+pcH+8
 ys2=MakeSection(SC2,"Executor Functions",ys2)
 
-local supported=#AllFunctions-#UnsupportedFunctions
-local allOk=#UnsupportedFunctions==0
-local sumH=isMobile and 52 or 46
-local sumF=Frame(SC2,UDim2.new(1,-32,0,sumH),UDim2.new(0,16,0,ys2),C.bg3,4)
-Stroke(sumF, allOk and C.grn or Color3.fromRGB(232,158,24), 2)
-Frame(sumF,UDim2.new(0,3,1,-8),UDim2.new(0,0,0,4),allOk and C.grn or Color3.fromRGB(232,158,24),2)
+local supported    = #AllFunctions-#UnsupportedFunctions
+local allOk        = #UnsupportedFunctions==0
+local statusCol    = allOk and C.grn or Color3.fromRGB(232,158,24)
+local statusBg     = allOk and Color3.fromRGB(10,38,20) or Color3.fromRGB(40,26,8)
+local pct          = #AllFunctions>0 and (supported/#AllFunctions) or 1
 
-local sumTitle=Lbl(sumF,
-    allOk and "All functions supported" or (#UnsupportedFunctions.." function(s) unsupported"),
-    isMobile and 12 or 12, C.white, Enum.Font.GothamBold)
-sumTitle.Size=UDim2.new(1,-14,0,isMobile and 20 or 18); sumTitle.Position=UDim2.new(0,10,0,isMobile and 7 or 5)
-sumTitle.TextXAlignment=Enum.TextXAlignment.Left
+local sumH=isMobile and 96 or 84
+local sumF=Frame(SC2,UDim2.new(1,-32,0,sumH),UDim2.new(0,16,0,ys2),C.bg3,8)
+Stroke(sumF, statusCol, 1)
+Frame(sumF,UDim2.new(0,4,1,-14),UDim2.new(0,0,0,7),statusCol,2)
 
-local sumSub=Lbl(sumF,
-    supported.." / "..#AllFunctions.." features available",
-    isMobile and 10 or 10, C.txt2, Enum.Font.Gotham)
-sumSub.Size=UDim2.new(1,-14,0,isMobile and 16 or 15); sumSub.Position=UDim2.new(0,10,0,isMobile and 28 or 24)
-sumSub.TextXAlignment=Enum.TextXAlignment.Left
+local iconSz=isMobile and 44 or 38
+local iconF=Frame(sumF,UDim2.new(0,iconSz,0,iconSz),
+    UDim2.new(0,isMobile and 14 or 12,0.5,-iconSz/2),statusBg,iconSz/2)
+Stroke(iconF,statusCol,1)
+Lbl(iconF,allOk and "✓" or "!",isMobile and 20 or 17,
+    statusCol,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
 
-ys2=ys2+sumH+6
+local stx=isMobile and (14+iconSz+12) or (12+iconSz+10)
+
+local cpW=isMobile and 50 or 44; local cpH2=isMobile and 19 or 16
+local cpF=Frame(sumF,UDim2.new(0,cpW,0,cpH2),UDim2.new(1,-(cpW+8),0,isMobile and 10 or 8),statusBg,cpH2/2)
+Stroke(cpF,statusCol,1)
+Lbl(cpF,supported.."  /  "..#AllFunctions,
+    isMobile and 9 or 8,statusCol,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+
+local titL=Lbl(sumF,
+    allOk and "All Functions Supported" or (#UnsupportedFunctions.." Function(s) Missing"),
+    isMobile and 13 or 12,C.white,Enum.Font.GothamBold)
+titL.Size=UDim2.new(1,-(stx+cpW+18),0,isMobile and 20 or 18)
+titL.Position=UDim2.new(0,stx,0,isMobile and 11 or 9)
+titL.TextXAlignment=Enum.TextXAlignment.Left
+
+local subL=Lbl(sumF,
+    allOk and "Executor is fully compatible" or "Open details to see what's missing",
+    isMobile and 10 or 9,C.txt2,Enum.Font.Gotham)
+subL.Size=UDim2.new(1,-(stx+8),0,isMobile and 15 or 13)
+subL.Position=UDim2.new(0,stx,0,isMobile and 34 or 30)
+subL.TextXAlignment=Enum.TextXAlignment.Left
+
+local barY=isMobile and 56 or 49; local barPx=isMobile and 6 or 5
+local barTrack=Frame(sumF,UDim2.new(1,-(stx+10),0,barPx),UDim2.new(0,stx,0,barY),C.bg4,barPx/2)
+Frame(barTrack,UDim2.new(pct,0,1,0),UDim2.new(0,0,0,0),statusCol,barPx/2)
+local pctL=Lbl(sumF,math.floor(pct*100).."%",
+    isMobile and 9 or 8,statusCol,Enum.Font.GothamBold,Enum.TextXAlignment.Right)
+pctL.Size=UDim2.new(0,30,0,isMobile and 14 or 12)
+pctL.Position=UDim2.new(1,-38,0,barY-(isMobile and 4 or 3))
+
+ys2=ys2+sumH+4
+
+if #UnsupportedFunctions>0 then
+    for _,fn in ipairs(UnsupportedFunctions) do
+        local chipH=isMobile and 26 or 22
+        local chipF=Frame(SC2,UDim2.new(1,-32,0,chipH),UDim2.new(0,16,0,ys2),
+            Color3.fromRGB(36,10,10),4)
+        Stroke(chipF,C.acc,1)
+        Frame(chipF,UDim2.new(0,3,1,-8),UDim2.new(0,0,0,4),C.acc,1)
+        local nL=Lbl(chipF,"✗  "..fn.name,isMobile and 10 or 9,C.acc,Enum.Font.GothamBold)
+        nL.Size=UDim2.new(0,isMobile and 120 or 110,1,0); nL.Position=UDim2.new(0,8,0,0)
+        nL.TextXAlignment=Enum.TextXAlignment.Left
+        local dL=Lbl(chipF,fn.desc,isMobile and 10 or 9,C.txt3,Enum.Font.Gotham)
+        dL.Size=UDim2.new(1,-(isMobile and 128 or 118),1,0)
+        dL.Position=UDim2.new(0,isMobile and 120 or 110,0,0)
+        dL.TextXAlignment=Enum.TextXAlignment.Left; dL.TextTruncate=Enum.TextTruncate.AtEnd
+        ys2=ys2+chipH+4
+    end
+    ys2=ys2+2
+end
 
 local function ShowFnPopup()
     local vp=workspace.CurrentCamera.ViewportSize
@@ -1555,7 +1732,8 @@ local function ShowFnPopup()
     end
 
     local yp=0
-    local entH=isMobile and 62 or 56
+    -- entH increased to fit the extra "Used by:" row
+    local entH=isMobile and 80 or 72
     local catH2=isMobile and 24 or 20
 
     for _,cat in ipairs(catOrder) do
@@ -1585,10 +1763,18 @@ local function ShowFnPopup()
                 fn.supported and C.grn or C.acc,
                 Enum.Font.GothamBold,Enum.TextXAlignment.Center)
 
+            -- Description
             local dL=Lbl(eF,fn.desc,isMobile and 10 or 9,C.txt2,Enum.Font.Gotham)
-            dL.Size=UDim2.new(1,-16,0,isMobile and 22 or 20)
-            dL.Position=UDim2.new(0,10,0,isMobile and 28 or 24)
+            dL.Size=UDim2.new(1,-16,0,isMobile and 20 or 18)
+            dL.Position=UDim2.new(0,10,0,isMobile and 28 or 25)
             dL.TextXAlignment=Enum.TextXAlignment.Left; dL.TextWrapped=true
+
+            -- "Used by" row — shows which features depend on this function
+            local usedStr = (fn.features and fn.features~="") and fn.features or "—"
+            local uL=Lbl(eF,"Used by:  "..usedStr,isMobile and 9 or 9,C.txt3,Enum.Font.Gotham)
+            uL.Size=UDim2.new(1,-16,0,isMobile and 16 or 14)
+            uL.Position=UDim2.new(0,10,0,isMobile and 52 or 46)
+            uL.TextXAlignment=Enum.TextXAlignment.Left
 
             yp=yp+entH+4
         end
