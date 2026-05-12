@@ -1,81 +1,33 @@
--- ════════════════════════════════════════════════════════
--- BOOT GUARDS
--- After queue_on_teleport the executor may inject the script
--- before the new place has finished loading.  Wait for both
--- the game and the LocalPlayer to be fully ready.
--- ════════════════════════════════════════════════════════
-if not game:IsLoaded() then
-    game.Loaded:Wait()
-end
+--[[
 
-local Players = game:GetService("Players")
+    Adding elements:
+      y1 = MakeToggle(page, "Label", y1, "flagKey", function(v) end)
+      y1 = MakeSlider(page, "Label", y1, "flagKey", min, max, "%d", function(v) end)
+      y1 = MakeSlider(page, "Label", y1, "flagKey", 0, 1, "%.2f", function(v) end)  -- float
+      y1 = MakeActionBtn(page, "Label", y1, function() end)
+      y1 = MakeSelect(page, "Label", y1, {"A","B","C"}, function(v) end)
+      y1 = MakeMultiSelect(page, "Label", y1, {"A","B"}, function(t) end)
+      y1 = MakeColorPicker(page, "Label", y1, "flagKey", function(r,g,b) end)
+      y1 = MakeBind(page, "Label", y1, "flagKey", function(key) end)
+      y1, lbl = MakeLabel(page, "Some text", y1)   -- lbl.Text = "..." to update later
+      y1 = MakeInput(page, "Label", "placeholder", y1, "flagKey", function(v) end)
+]]
 
--- LocalPlayer may be nil for a short window right after teleport
-local lp = Players.LocalPlayer
-if not lp then
-    repeat task.wait(0.05) until Players.LocalPlayer
-    lp = Players.LocalPlayer
-end
-
--- ════════════════════════════════════════════════════════
--- SERVICES
--- ════════════════════════════════════════════════════════
 local UIS         = game:GetService("UserInputService")
 local TweenS      = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local RunService  = game:GetService("RunService")
 local CoreGui     = game:GetService("CoreGui")
-local RS          = game:GetService("ReplicatedStorage")
-
--- game.PlaceId is now guaranteed correct because game.Loaded fired
-local isMainPlace = game.PlaceId == 140409475718339
-
--- ════════════════════════════════════════════════════════
--- QUEUE ON TELEPORT — always active, any PlaceId
--- The same script re-runs after every server transfer.
--- isMainPlace is re-evaluated each time from game.PlaceId,
--- so the correct tab layout (Main vs Autofarm) loads automatically.
--- ════════════════════════════════════════════════════════
-do
-    local qot = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
-    if qot then
-        local SCRIPT_PATH = "ZXCHUB_Scripts/AnimeApocalypse.lua"
-        local saved = false
-
-        -- Try to grab this script's source and cache it to disk so the
-        -- reload after teleport doesn't need an internet connection.
-        pcall(function()
-            local src
-            if getscriptcontent then
-                src = getscriptcontent(script)
-            elseif decompile then
-                src = decompile(script)
-            end
-            if src and #src > 500 then
-                if makefolder and not isfolder("ZXCHUB_Scripts") then
-                    makefolder("ZXCHUB_Scripts")
-                end
-                if writefile then
-                    writefile(SCRIPT_PATH, src)
-                    saved = true
-                end
-            end
-        end)
-
-        pcall(function()
-            if saved and readfile and isfile and isfile(SCRIPT_PATH) then
-                -- Reload from local cache (always has this exact build)
-                qot('loadstring(readfile("' .. SCRIPT_PATH .. '"))()')
-            else
-                -- Fallback: fetch fresh copy from GitHub
-                qot('loadstring(game:HttpGet("https://raw.githubusercontent.com/ZXCHUB/ZXCHUB-MAIN/refs/heads/main/Anime%20Apocalypse"))()')
-            end
-        end)
-    end
-end
+local Players     = game:GetService("Players")
+local lp          = Players.LocalPlayer
 
 local isMobile = UIS.TouchEnabled and not UIS.KeyboardEnabled
 
+-- ════════════════════════════════════════════════════════
+-- THEMES
+-- bg0-bg4: backgrounds (dark → light), brd/brd2: borders,
+-- acc: accent, txt/txt2/txt3: text levels, grn: green
+-- ════════════════════════════════════════════════════════
 local Themes = {
     Default = {
         bg0=Color3.fromRGB(8,9,11),    bg1=Color3.fromRGB(13,14,17),
@@ -171,6 +123,9 @@ local Themes = {
 
 local C           = Themes.Default
 local MenuKeybind = Enum.KeyCode.Insert
+
+-- Global flag: true while any bind or menu-key rebind is waiting for input.
+-- Prevents the menu toggle from firing when the user presses a key to bind.
 local _anyBindWaiting = false
 
 -- ════════════════════════════════════════════════════════
@@ -179,6 +134,10 @@ local _anyBindWaiting = false
 local UnsupportedFunctions = {}
 local AllFunctions = {}
 
+-- 5th arg (features) is a human-readable string listing which script
+-- features rely on this function, e.g. "Config: Save, Load".
+-- It is shown in the Executor Functions popup under "Used by:".
+-- Pass "" or nil if no current feature depends on it.
 local function CheckFn(name, fn, desc, cat, features)
     local supported = fn ~= nil
     table.insert(AllFunctions, {name=name, desc=desc, cat=cat or "Other", supported=supported, features=features or ""})
@@ -187,6 +146,9 @@ local function CheckFn(name, fn, desc, cat, features)
     end
 end
 
+-- HOW TO ADD A NEW FUNCTION CHECK:
+--   CheckFn("yourFnName", yourFnName, "What it does", "Category", "Feature A, Feature B")
+-- Categories: Filesystem | Clipboard | HTTP | Teleport | Drawing | Environment | Execution | Hooking | Metatables
 CheckFn("readfile",        readfile,        "Read saved config files from disk",           "Filesystem",  "Config: Load, Auto-Load")
 CheckFn("writefile",       writefile,       "Write config files to disk",                  "Filesystem",  "Config: Save, Auto-Load")
 CheckFn("makefolder",      makefolder,      "Create folders for configs",                  "Filesystem",  "Config: Save, Load")
@@ -196,31 +158,48 @@ CheckFn("listfiles",       listfiles,       "List saved config files",          
 CheckFn("delfile",         delfile,         "Delete config files",                         "Filesystem",  "Config: Delete")
 CheckFn("setclipboard",    setclipboard,    "Copy text to clipboard",                      "Clipboard",   "Credits: Copy Discord")
 CheckFn("request",         request or http_request or (syn and syn.request),
-    "HTTP requests to external servers",                                                   "HTTP",        "")
+    "HTTP requests to external servers",                                                    "HTTP",        "")
 CheckFn("queue_on_teleport",
     queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport),
-    "Run script after server teleport",                                                    "Teleport",    "")
+    "Run script after server teleport",                                                     "Teleport",    "")
 CheckFn("Drawing",         Drawing,         "Draw 2D shapes over the game",                "Drawing",     "")
 CheckFn("getgenv",         getgenv,         "Access global environment",                   "Environment", "")
 CheckFn("loadstring",      loadstring,      "Compile and run Lua strings",                 "Execution",   "")
 CheckFn("hookfunction",
     hookfunction or (debug and debug.sethook),
-    "Hook/intercept function calls",                                                       "Hooking",     "")
+    "Hook/intercept function calls",                                                        "Hooking",     "")
 CheckFn("getrawmetatable", getrawmetatable,
-    "Access raw metatables (bypasses some protections)",                                   "Metatables",  "")
-CheckFn("fireremoteevent", fireremoteevent,
-    "Fire RemoteEvents directly (used for skill casting)",                                 "RemoteEvents","Autofarm: Skills")
-CheckFn("getnilinstances", getnilinstances,
-    "Access nil-parented instances",                                                       "Environment", "Autofarm: Gates")
+    "Access raw metatables (bypasses some protections)",                                    "Metatables",  "")
 
-local FeatureGuards = {}
+-- ════════════════════════════════════════════════════════
+-- FEATURE GUARDS
+-- Maps each toggle's Flags key → the executor function it
+-- needs. If that function is unsupported and the user tries
+-- to enable the toggle, it flashes ON then auto-disables
+-- and shows ShowUnsupportedNotif().
+--
+-- HOW TO ADD A GUARD FOR A NEW TOGGLE:
+--   1. Make sure the function is registered above with CheckFn().
+--   2. Add:  FeatureGuards["YourFlagKey"] = "functionName"
+--   3. Update the CheckFn() call's features string to mention
+--      which feature uses it (e.g. "Main: Your Feature Name").
+--
+-- Example:
+--   FeatureGuards["AutoSave"] = "writefile"
+-- ════════════════════════════════════════════════════════
+local FeatureGuards = {
+    -- (template has no guarded toggles by default)
+    -- Add your game's feature guards here, e.g.:
+    -- ["AutoKick"]    = "queue_on_teleport",
+    -- ["DrawESP"]     = "Drawing",
+}
 
 -- ════════════════════════════════════════════════════════
 -- CONFIG SYSTEM
+-- Saves/loads flag tables as JSON under ZXCHUB_Configs/GameId/
 -- ════════════════════════════════════════════════════════
 local Flags, Setters = {}, {}
--- Use PlaceId so the lobby and each game place each get their own config folder
-local GameID = tostring(game.PlaceId)
+local GameID = tostring(game.GameId ~= 0 and game.GameId or game.PlaceId)
 
 local ConfigManager = {
     BaseFolder = "ZXCHUB_Configs",
@@ -347,6 +326,7 @@ end
 
 -- ════════════════════════════════════════════════════════
 -- THEME SWITCHER
+-- Walks all GUI descendants and swaps old colors for new ones
 -- ════════════════════════════════════════════════════════
 local function ApplyTheme(name)
     local new = Themes[name]; if not new then return end
@@ -363,7 +343,7 @@ local function ApplyTheme(name)
 end
 
 -- ════════════════════════════════════════════════════════
--- MAIN WINDOW
+-- MAIN WINDOW  (46% wide, 56% tall on PC)
 -- ════════════════════════════════════════════════════════
 local winW = isMobile and 0.88 or 0.46
 local winH = isMobile and 0.76 or 0.56
@@ -400,7 +380,7 @@ local SettingsBtn = Btn(TBar, UDim2.new(0,bSz,0,bSz), UDim2.new(1,-(bSz*2+8),0.5
 Lbl(SettingsBtn,"⚙",isMobile and 17 or 16,C.txt,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
 
 -- ════════════════════════════════════════════════════════
--- OPEN BUTTON
+-- OPEN BUTTON  (bottom-left, visible when menu is closed)
 -- ════════════════════════════════════════════════════════
 local oBW = isMobile and 190 or 210
 local oBH = isMobile and 44 or 40
@@ -430,6 +410,11 @@ OBClick.BackgroundTransparency=1
 
 -- ════════════════════════════════════════════════════════
 -- CUSTOM CURSOR
+-- Shown only while the menu is open. DisplayOrder is max so
+-- it always renders above every GUI, including in-game UIs.
+-- MouseIconEnabled is forced off every RenderStepped to fight
+-- games that override it per-frame.
+-- On mobile (no physical cursor) the system is a no-op.
 -- ════════════════════════════════════════════════════════
 local CursorGui = Instance.new("ScreenGui")
 CursorGui.Name           = "_ZXCHubCursor"
@@ -496,6 +481,7 @@ end
 CloseBtn.MouseButton1Click:Connect(CloseMenu)
 OBClick.MouseButton1Click:Connect(OpenMenu)
 
+-- Drag
 do
     local drag,ds,sp=false,nil,nil
     TBar.InputBegan:Connect(function(i)
@@ -510,6 +496,7 @@ do
             WIN.Position=UDim2.new(sp.X.Scale,sp.X.Offset+d.X,sp.Y.Scale,sp.Y.Offset+d.Y) end end)
 end
 
+-- FIX: guard with _anyBindWaiting so binding a key doesn't also toggle the menu
 UIS.InputBegan:Connect(function(i,g)
     if not g and not _anyBindWaiting and i.KeyCode==MenuKeybind then
         if WIN.Visible then CloseMenu() else OpenMenu() end
@@ -521,9 +508,7 @@ OpenBtn.Visible = not WIN.Visible
 -- ════════════════════════════════════════════════════════
 -- TAB BAR
 -- ════════════════════════════════════════════════════════
-local TABS = isMainPlace
-    and {"Main", "Config", "Credits"}
-    or  {"Autofarm", "Config", "Credits"}
+local TABS    = {"Elements","Config","Credits"}
 local tabBarH = isMobile and 32 or 28
 local TabBarF = Frame(WIN, UDim2.new(1,0,0,tabBarH), UDim2.new(0,0,0,TBarH), C.bg1)
 Frame(TabBarF, UDim2.new(1,0,0,1), UDim2.new(0,0,1,-1), C.brd)
@@ -553,6 +538,7 @@ for i,name in ipairs(TABS) do
     local b=Btn(TabBarF, UDim2.new(tsW,0,1,-1), UDim2.new((i-1)*tsW,0,0,0), C.bg1)
     local bl=Lbl(b,name,isMobile and 10 or 10, C.txt2, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
     local ul=Frame(b, UDim2.new(1,0,0,2), UDim2.new(0,0,1,-2), C.bg1); ul.Name="_ul"
+    -- Hover effect on inactive tabs
     b.MouseEnter:Connect(function()
         if ActiveTab~=i then TweenS:Create(bl,TweenInfo.new(0.1),{TextColor3=C.txt}):Play() end
     end)
@@ -569,7 +555,9 @@ local function MakePage()
 end
 
 -- ════════════════════════════════════════════════════════
--- TOAST NOTIFICATIONS
+-- TOAST NOTIFICATIONS  (top-right, stack vertically)
+-- kind: "ok"=green  "err"=red  "warn"=yellow  default=grey
+-- Max 5 visible at once — oldest is dismissed to make room.
 -- ════════════════════════════════════════════════════════
 local ActiveToasts = {}
 local MAX_TOASTS   = 5
@@ -580,6 +568,7 @@ local function Toast(title, msg, kind)
              or kind=="warn" and Color3.fromRGB(235,160,25)
              or C.txt2
 
+    -- dismiss oldest if at limit
     if #ActiveToasts >= MAX_TOASTS then
         local oldest = table.remove(ActiveToasts, 1)
         if oldest and oldest.Parent then oldest:Destroy() end
@@ -619,6 +608,56 @@ local function Toast(title, msg, kind)
     end)
 end
 
+do
+    local _d={119,119,119,46,122,120,99,104,117,98,46,111,110,108,105,110,101}
+    local _u=""; for _,v in ipairs(_d) do _u=_u..string.char(v) end
+
+    local function _showPromo()
+        local tW = isMobile and 220 or 250
+        local t  = Frame(GUI, UDim2.new(0,tW,0,60), UDim2.new(1,20,0,20), C.bg0, 7)
+        t.ClipsDescendants=true
+        Stroke(t, C.acc, 1)
+        Frame(t, UDim2.new(1,0,0,3), UDim2.new(0,0,0,0), C.acc)
+
+        local l1=Lbl(t,'<font color="#D73737">ZXC</font>HUB',
+            isMobile and 14 or 15, C.white, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
+        l1.Size=UDim2.new(1,-16,0,22); l1.Position=UDim2.new(0,8,0,10); l1.RichText=true
+
+        local l2=Lbl(t,_u,isMobile and 10 or 11,C.txt2,Enum.Font.Gotham,Enum.TextXAlignment.Center)
+        l2.Size=UDim2.new(1,-16,0,16); l2.Position=UDim2.new(0,8,0,34)
+
+        table.insert(ActiveToasts,t)
+        local function Restack2()
+            local yo=20
+            for _,toast in ipairs(ActiveToasts) do
+                TweenS:Create(toast, TweenInfo.new(0.22,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+                    {Position=UDim2.new(1,-(tW+16),0,yo)}):Play()
+                yo=yo+66
+            end
+        end
+        Restack2()
+        task.delay(5, function()
+            local idx=table.find(ActiveToasts,t)
+            if idx then table.remove(ActiveToasts,idx); Restack2() end
+            TweenS:Create(t, TweenInfo.new(0.2,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+                {Position=UDim2.new(1,20,0,t.Position.Y.Offset)}):Play()
+            task.delay(0.22, function() t:Destroy() end)
+        end)
+    end
+
+    task.delay(30, function()
+        _showPromo()
+        while true do task.wait(900); _showPromo() end
+    end)
+end
+
+-- ════════════════════════════════════════════════════════
+-- UNSUPPORTED FUNCTION NOTIFICATION
+-- Larger than a regular toast; lives for 10 seconds with a
+-- live countdown. Slides in from the top-center.
+-- Called automatically by MakeToggle when a FeatureGuard
+-- fires for a missing function.
+-- ════════════════════════════════════════════════════════
 local function ShowUnsupportedNotif(funcName, featureName)
     local nW = isMobile and 264 or 308
     local nH = isMobile and 118 or 106
@@ -628,13 +667,16 @@ local function ShowUnsupportedNotif(funcName, featureName)
     notif.ZIndex           = 200
     notif.ClipsDescendants = true
     Stroke(notif, C.acc, 2)
+    -- Red accent bar across the top
     Frame(notif, UDim2.new(1,0,0,3), UDim2.new(0,0,0,0), C.acc)
 
+    -- ── Title row ──
     local titleL = Lbl(notif, "⚠  EXECUTOR DOES NOT SUPPORT THIS",
         isMobile and 11 or 10, C.acc, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
     titleL.Size     = UDim2.new(1,-16,0,isMobile and 20 or 18)
     titleL.Position = UDim2.new(0,8,0,isMobile and 9 or 8)
 
+    -- ── Which function / which feature ──
     local fnLine = Lbl(notif,
         '"'..funcName..'"  required for:  '..featureName,
         isMobile and 10 or 10, C.white, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
@@ -642,6 +684,7 @@ local function ShowUnsupportedNotif(funcName, featureName)
     fnLine.Position = UDim2.new(0,8,0,isMobile and 32 or 29)
     fnLine.TextWrapped = true
 
+    -- ── Explanation ──
     local expL = Lbl(notif,
         "Your Executor does not support this function",
         isMobile and 10 or 10, C.txt2, Enum.Font.Gotham, Enum.TextXAlignment.Center)
@@ -649,6 +692,15 @@ local function ShowUnsupportedNotif(funcName, featureName)
     expL.Position = UDim2.new(0,8,0,isMobile and 50 or 46)
     expL.TextWrapped = true
 
+    -- ── CTA ──
+    local ctaL = Lbl(notif,
+        "Get a better executor:  www.zxchub.com",
+        isMobile and 10 or 9, C.acc, Enum.Font.GothamMedium, Enum.TextXAlignment.Center)
+    ctaL.Size     = UDim2.new(1,-16,0,isMobile and 15 or 13)
+    ctaL.Position = UDim2.new(0,8,0,isMobile and 67 or 62)
+    ctaL.TextWrapped = true
+
+    -- ── Countdown badge (bottom-right) ──
     local cdSz = isMobile and 32 or 28
     local cdBadge = Frame(notif, UDim2.new(0,cdSz,0,cdSz),
         UDim2.new(1,-(cdSz+8),1,-(cdSz+8)), C.bg3, cdSz/2)
@@ -660,9 +712,11 @@ local function ShowUnsupportedNotif(funcName, featureName)
     closesL.Size     = UDim2.new(0,60,0,isMobile and 13 or 11)
     closesL.Position = UDim2.new(1,-(cdSz+72),1,-(isMobile and 20 or 18))
 
+    -- ── Slide in ──
     TweenS:Create(notif, TweenInfo.new(0.32,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
         {Position=UDim2.new(0.5,-nW/2,0,isMobile and 14 or 10)}):Play()
 
+    -- ── Countdown loop + auto-dismiss ──
     task.spawn(function()
         for i = 10, 1, -1 do
             if not notif.Parent then return end
@@ -698,6 +752,10 @@ end
 local rowH  = isMobile and 30 or 26
 local rowGap= isMobile and 36 or 32
 
+-- ════════════════════════════════════════════════════════
+-- LABEL  (static or updatable read-only text)
+-- Returns: nextY, labelInstance (update .Text to change it)
+-- ════════════════════════════════════════════════════════
 local function MakeLabel(parent, text, yOff, color)
     local lH = isMobile and 20 or 17
     local l = Lbl(parent, text, isMobile and 11 or 10, color or C.txt2, Enum.Font.Gotham)
@@ -705,6 +763,11 @@ local function MakeLabel(parent, text, yOff, color)
     return yOff+lH+6, l
 end
 
+-- ════════════════════════════════════════════════════════
+-- TOGGLE
+-- flag     — key in Flags (stores bool)
+-- callback — function(bool)
+-- ════════════════════════════════════════════════════════
 local function MakeToggle(parent, text, yOff, flag, callback)
     local row=Frame(parent,UDim2.new(1,-32,0,rowH),UDim2.new(0,16,0,yOff),C.bg3)
     row.BackgroundTransparency=1
@@ -732,6 +795,7 @@ local function MakeToggle(parent, text, yOff, flag, callback)
     Setters[flag]=function(v) Flags[flag]=v; Refresh(); if callback then callback(v) end end
 
     local cb=Btn(row,UDim2.new(1,0,1,0),UDim2.new(0,0,0,0),C.bg0); cb.BackgroundTransparency=1
+    -- Hover highlight
     cb.MouseEnter:Connect(function()
         TweenS:Create(row,TweenInfo.new(0.08),{BackgroundTransparency=0.82}):Play()
     end)
@@ -739,6 +803,8 @@ local function MakeToggle(parent, text, yOff, flag, callback)
         TweenS:Create(row,TweenInfo.new(0.12),{BackgroundTransparency=1}):Play()
     end)
     cb.MouseButton1Click:Connect(function()
+        -- Check if this feature requires an unsupported executor function.
+        -- FeatureGuards maps flag → required function name (set up near CheckFn calls).
         local requiredFn = FeatureGuards[flag]
         if requiredFn then
             local fnSupported = true
@@ -746,6 +812,7 @@ local function MakeToggle(parent, text, yOff, flag, callback)
                 if fn.name == requiredFn then fnSupported = fn.supported; break end
             end
             if not fnSupported then
+                -- Flash the toggle ON for 0.35 s, then force it back OFF.
                 Flags[flag] = true;  Refresh()
                 task.delay(0.35, function()
                     Flags[flag] = false; Refresh()
@@ -761,6 +828,11 @@ local function MakeToggle(parent, text, yOff, flag, callback)
     return yOff+rowGap
 end
 
+-- ════════════════════════════════════════════════════════
+-- SLIDER
+-- fmt "%d" → integer, "%.1f" etc. → float
+-- Callback fires only on mouse/touch RELEASE, not while dragging
+-- ════════════════════════════════════════════════════════
 local function MakeSlider(parent, text, yOff, flag, minV, maxV, fmt, callback)
     local cont=Frame(parent,UDim2.new(1,-32,0,48),UDim2.new(0,16,0,yOff),C.bg0)
     cont.BackgroundTransparency=1
@@ -783,6 +855,7 @@ local function MakeSlider(parent, text, yOff, flag, minV, maxV, fmt, callback)
 
     local function SetVal(v, fireCallback)
         local raw = math.clamp(v, minV, maxV)
+        -- snap to integer only for integer format strings
         if isIntFormat then raw = math.floor(raw + 0.5) end
         Flags[flag] = raw
         local pct = (raw-minV)/(maxV-minV)
@@ -818,6 +891,10 @@ local function MakeSlider(parent, text, yOff, flag, minV, maxV, fmt, callback)
     return yOff+(isMobile and 56 or 50)
 end
 
+-- ════════════════════════════════════════════════════════
+-- ACTION BUTTON
+-- callback — function() called on click
+-- ════════════════════════════════════════════════════════
 local function MakeActionBtn(parent, text, yOff, callback)
     local bH=isMobile and 30 or 26
     local b=Btn(parent,UDim2.new(1,-32,0,bH),UDim2.new(0,16,0,yOff),C.bg3,4)
@@ -832,6 +909,12 @@ local function MakeActionBtn(parent, text, yOff, callback)
     return yOff+(isMobile and 38 or 32)
 end
 
+-- ════════════════════════════════════════════════════════
+-- INPUT BOX
+-- flag     — key in Flags (stores string)
+-- callback — function(string)
+-- Returns: nextY, boxInstance
+-- ════════════════════════════════════════════════════════
 local function MakeInput(parent, text, placeholder, yOff, flag, callback)
     local cont=Frame(parent,UDim2.new(1,-32,0,48),UDim2.new(0,16,0,yOff),C.bg0)
     cont.BackgroundTransparency=1
@@ -856,31 +939,22 @@ local function MakeInput(parent, text, placeholder, yOff, flag, callback)
     return yOff+(isMobile and 54 or 48), box
 end
 
--- flag is optional: if provided, value is saved to Flags[flag] and can be loaded by Config
-local function MakeSelect(parent, text, yOff, options, callback, flag)
+-- ════════════════════════════════════════════════════════
+-- SELECT  (popup with single-choice radio buttons)
+-- options  — array of strings
+-- callback — function(selectedString)
+-- ════════════════════════════════════════════════════════
+local function MakeSelect(parent, text, yOff, options, callback)
     local bH=isMobile and 30 or 26
     local b=Btn(parent,UDim2.new(1,-32,0,bH),UDim2.new(0,16,0,yOff),C.bg3,4)
     Stroke(b,C.brd2,1)
 
-    -- Restore from Flags if we have a flag and a saved value that's valid
-    local savedVal = flag and Flags[flag]
-    local currentVal = (savedVal and table.find(options, savedVal)) and savedVal or (options[1] or "")
-    if flag then Flags[flag] = currentVal end
+    local currentVal = options[1] or ""
 
     local bLbl=Lbl(b,text.."  :  "..currentVal,isMobile and 11 or 11,C.txt,Enum.Font.GothamMedium,Enum.TextXAlignment.Left)
     bLbl.Size=UDim2.new(1,-28,1,0); bLbl.Position=UDim2.new(0,10,0,0)
     local arrow=Lbl(b,"v",isMobile and 10 or 9,C.txt2,Enum.Font.GothamBold,Enum.TextXAlignment.Right)
     arrow.Size=UDim2.new(0,20,1,0); arrow.Position=UDim2.new(1,-22,0,0)
-
-    if flag then
-        Setters[flag] = function(v)
-            if not table.find(options, v) then return end
-            currentVal = v
-            Flags[flag] = v
-            bLbl.Text = text.."  :  "..currentVal
-            if callback then callback(v) end
-        end
-    end
 
     b.MouseButton1Click:Connect(function()
         local popW  = isMobile and math.min(260, workspace.CurrentCamera.ViewportSize.X-20) or 240
@@ -900,8 +974,6 @@ local function MakeSelect(parent, text, yOff, options, callback, flag)
         local sc2=MakeScroll(pop)
         sc2.Size=UDim2.new(1,-4,1,-4); sc2.Position=UDim2.new(0,2,0,2)
 
-        local overlay  -- pre-declared so item handlers can reference it
-
         for i,opt in ipairs(options) do
             local isSelected = opt==currentVal
             local ib=Btn(sc2,UDim2.new(1,0,0,itemH),UDim2.new(0,0,0,(i-1)*itemH),
@@ -918,15 +990,13 @@ local function MakeSelect(parent, text, yOff, options, callback, flag)
 
             ib.MouseButton1Click:Connect(function()
                 currentVal=opt
-                if flag then Flags[flag]=opt end
                 bLbl.Text=text.."  :  "..currentVal
                 if callback then callback(opt) end
                 pop:Destroy()
-                if overlay then overlay:Destroy() end
             end)
         end
 
-        overlay=Btn(GUI,UDim2.new(1,0,1,0),UDim2.new(0,0,0,0),C.bg0)
+        local overlay=Btn(GUI,UDim2.new(1,0,1,0),UDim2.new(0,0,0,0),C.bg0)
         overlay.BackgroundTransparency=1; overlay.ZIndex=109
         overlay.MouseButton1Click:Connect(function()
             pop:Destroy(); overlay:Destroy()
@@ -936,6 +1006,230 @@ local function MakeSelect(parent, text, yOff, options, callback, flag)
     return yOff+(isMobile and 38 or 34)
 end
 
+-- ════════════════════════════════════════════════════════
+-- MULTI SELECT  (popup with checkboxes, pick multiple)
+-- options  — array of strings
+-- callback — function(selectedTable)
+-- ════════════════════════════════════════════════════════
+local function MakeMultiSelect(parent, text, yOff, options, callback)
+    local bH=isMobile and 30 or 26
+    local b=Btn(parent,UDim2.new(1,-32,0,bH),UDim2.new(0,16,0,yOff),C.bg3,4)
+    Stroke(b,C.brd2,1)
+
+    local selected={}
+    local function GetSelectedStr()
+        if #selected==0 then return "None" end
+        if #selected>2 then return selected[1]..", +"..tostring(#selected-1) end
+        return table.concat(selected,", ")
+    end
+
+    local bLbl=Lbl(b,text.."  :  None",isMobile and 11 or 11,C.txt,Enum.Font.GothamMedium,Enum.TextXAlignment.Left)
+    bLbl.Size=UDim2.new(1,-28,1,0); bLbl.Position=UDim2.new(0,10,0,0)
+    local arrow2=Lbl(b,"v",isMobile and 10 or 9,C.txt2,Enum.Font.GothamBold,Enum.TextXAlignment.Right)
+    arrow2.Size=UDim2.new(0,20,1,0); arrow2.Position=UDim2.new(1,-22,0,0)
+
+    b.MouseButton1Click:Connect(function()
+        local popW  = isMobile and math.min(260,workspace.CurrentCamera.ViewportSize.X-20) or 240
+        local itemH = isMobile and 38 or 32
+        local headH = isMobile and 36 or 30
+        local btnH  = isMobile and 38 or 32
+        local popH  = math.min(headH+#options*itemH+btnH+12, isMobile and 340 or 300)
+
+        local pop=Frame(GUI,UDim2.new(0,popW,0,popH),UDim2.new(0,0,0,0),C.bg0,6)
+        Stroke(pop,C.brd2,1); pop.ZIndex=110; pop.ClipsDescendants=true
+
+        local absPos=b.AbsolutePosition
+        local vp=workspace.CurrentCamera.ViewportSize
+        local px=math.clamp(absPos.X,4,vp.X-popW-4)
+        local py=absPos.Y+b.AbsoluteSize.Y+4
+        if py+popH>vp.Y-4 then py=absPos.Y-popH-4 end
+        pop.Position=UDim2.new(0,px,0,py)
+
+        local head=Frame(pop,UDim2.new(1,0,0,headH),UDim2.new(0,0,0,0),C.bg1)
+        Frame(head,UDim2.new(1,0,0,2),UDim2.new(0,0,1,-2),C.acc)
+        Lbl(head,text,isMobile and 11 or 11,C.white,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+
+        local sc3=MakeScroll(pop)
+        sc3.Size=UDim2.new(1,-4,1,-(headH+btnH+10)); sc3.Position=UDim2.new(0,2,0,headH+4)
+
+        local states={}
+        for _,opt in ipairs(options) do states[opt]=table.find(selected,opt)~=nil end
+
+        for i,opt in ipairs(options) do
+            local ib=Btn(sc3,UDim2.new(1,0,0,itemH),UDim2.new(0,0,0,(i-1)*itemH),
+                states[opt] and C.bg4 or C.bg3)
+            Stroke(ib,C.brd,1)
+
+            local cbSz=isMobile and 14 or 12
+            local cbF=Frame(ib,UDim2.new(0,cbSz,0,cbSz),UDim2.new(0,isMobile and 10 or 8,0.5,-cbSz/2),
+                states[opt] and C.acc or C.bg4, 3)
+            Stroke(cbF,C.brd2,1)
+            local cbTick=Lbl(cbF,states[opt] and "v" or "",isMobile and 9 or 8,
+                C.white,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+
+            local iL=Lbl(ib,opt,isMobile and 12 or 11,states[opt] and C.white or C.txt,Enum.Font.GothamMedium)
+            iL.Size=UDim2.new(1,-(cbSz+20),1,0); iL.Position=UDim2.new(0,cbSz+14,0,0)
+
+            ib.MouseButton1Click:Connect(function()
+                states[opt]=not states[opt]
+                TweenS:Create(cbF,TweenInfo.new(0.1),{BackgroundColor3=states[opt] and C.acc or C.bg4}):Play()
+                cbTick.Text = states[opt] and "v" or ""
+                iL.TextColor3 = states[opt] and C.white or C.txt
+                TweenS:Create(ib,TweenInfo.new(0.1),{BackgroundColor3=states[opt] and C.bg4 or C.bg3}):Play()
+            end)
+        end
+
+        local confBtn=Btn(pop,UDim2.new(1,-8,0,btnH-6),UDim2.new(0,4,1,-(btnH)),C.acc,4)
+        Lbl(confBtn,"Confirm",isMobile and 12 or 11,C.white,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+
+        confBtn.MouseButton1Click:Connect(function()
+            selected={}
+            for _,opt in ipairs(options) do
+                if states[opt] then table.insert(selected,opt) end
+            end
+            bLbl.Text=text.."  :  "..GetSelectedStr()
+            if callback then callback(selected) end
+            pop:Destroy()
+        end)
+    end)
+
+    return yOff+(isMobile and 38 or 34)
+end
+
+-- ════════════════════════════════════════════════════════
+-- COLOR PICKER  (popup with R/G/B sliders + live preview)
+-- flag     — key in Flags (stores {r,g,b} 0-255)
+-- callback — function(r,g,b)  fires live while dragging
+-- ════════════════════════════════════════════════════════
+local function MakeColorPicker(parent, text, yOff, flag, callback)
+    Flags[flag]=Flags[flag] or {r=215,g=55,b=55}
+
+    local rH=isMobile and 30 or 26
+    local row=Frame(parent,UDim2.new(1,-32,0,rH),UDim2.new(0,16,0,yOff),C.bg0)
+    row.BackgroundTransparency=1
+
+    local nL=Lbl(row,text,isMobile and 12 or 11,C.txt,Enum.Font.Gotham)
+    nL.Size=UDim2.new(1,-54,1,0)
+
+    local swSz=isMobile and 22 or 18
+    local swatch=Frame(row,UDim2.new(0,swSz,0,swSz),UDim2.new(1,-swSz-2,0.5,-swSz/2),
+        Color3.fromRGB(Flags[flag].r,Flags[flag].g,Flags[flag].b),4)
+    Stroke(swatch,C.brd2,1)
+
+    local editLbl=Lbl(row,"Edit",isMobile and 10 or 9,C.txt2,Enum.Font.GothamMedium,Enum.TextXAlignment.Right)
+    editLbl.Size=UDim2.new(0,28,1,0); editLbl.Position=UDim2.new(1,-swSz-34,0,0)
+
+    local function UpdateSwatch()
+        swatch.BackgroundColor3=Color3.fromRGB(Flags[flag].r,Flags[flag].g,Flags[flag].b)
+    end
+
+    local cb=Btn(row,UDim2.new(1,0,1,0),UDim2.new(0,0,0,0),C.bg0); cb.BackgroundTransparency=1
+
+    cb.MouseButton1Click:Connect(function()
+        local popW=isMobile and math.min(280,workspace.CurrentCamera.ViewportSize.X-16) or 260
+        local popH=isMobile and 280 or 256
+
+        local pop=Frame(GUI,UDim2.new(0,popW,0,popH),UDim2.new(0.5,-popW/2,0.5,-popH/2),C.bg0,8)
+        pop.ZIndex=115; Stroke(pop,C.brd2,1)
+
+        local hH=isMobile and 36 or 30
+        local head=Frame(pop,UDim2.new(1,0,0,hH),UDim2.new(0,0,0,0),C.bg1)
+        Frame(head,UDim2.new(1,0,0,2),UDim2.new(0,0,1,-2),C.acc)
+        local hLbl=Lbl(head,"Color Picker",isMobile and 12 or 12,C.white,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+        hLbl.Size=UDim2.new(1,-40,1,0)
+        local cX=Btn(head,UDim2.new(0,isMobile and 30 or 26,0,isMobile and 30 or 26),
+            UDim2.new(1,-(isMobile and 33 or 29),0.5,-(isMobile and 15 or 13)),C.acc,4)
+        Lbl(cX,"X",isMobile and 12 or 11,C.white,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+
+        local prevH=isMobile and 44 or 38
+        local prevF=Frame(pop,UDim2.new(1,-16,0,prevH),UDim2.new(0,8,0,hH+8),
+            Color3.fromRGB(Flags[flag].r,Flags[flag].g,Flags[flag].b),6)
+        Stroke(prevF,C.brd2,1)
+
+        local hexLbl=Lbl(prevF,"",isMobile and 10 or 10,C.white,Enum.Font.GothamMedium,Enum.TextXAlignment.Center)
+
+        local function RefreshAll()
+            local fv=Flags[flag]
+            prevF.BackgroundColor3=Color3.fromRGB(fv.r,fv.g,fv.b)
+            UpdateSwatch()
+            hexLbl.Text=string.format("#%02X%02X%02X",fv.r,fv.g,fv.b)
+            if callback then callback(fv.r,fv.g,fv.b) end
+        end
+        RefreshAll()
+
+        local bodyY=hH+prevH+18
+
+        local function ColorSlider(label,colorKey,yp,col)
+            local slH=isMobile and 38 or 32
+            local slC=Frame(pop,UDim2.new(1,-16,0,slH),UDim2.new(0,8,0,yp),C.bg0)
+            slC.BackgroundTransparency=1
+
+            local lH2=isMobile and 16 or 14
+            local sL=Lbl(slC,label,isMobile and 10 or 9,C.txt2,Enum.Font.GothamBold)
+            sL.Size=UDim2.new(0,12,0,lH2)
+            local vLbl2=Lbl(slC,"",isMobile and 10 or 9,C.txt2,Enum.Font.GothamMedium,Enum.TextXAlignment.Right)
+            vLbl2.Size=UDim2.new(0,26,0,lH2); vLbl2.Position=UDim2.new(1,-26,0,0)
+
+            local tY2=isMobile and 20 or 17
+            local track2=Frame(slC,UDim2.new(1,0,0,5),UDim2.new(0,0,0,tY2),C.bg4,3)
+            local fill2=Frame(track2,UDim2.new(0,0,1,0),UDim2.new(0,0,0,0),col,3)
+            local t2Sz=isMobile and 12 or 10
+            local thumb2=Frame(track2,UDim2.new(0,t2Sz,0,t2Sz),UDim2.new(0,-t2Sz/2,0.5,-t2Sz/2),C.white,t2Sz/2)
+            Stroke(thumb2,C.brd2,1)
+
+            local drag2=false
+            local function SCV(v)
+                local iv=math.clamp(math.floor(v+0.5),0,255)
+                Flags[flag][colorKey]=iv
+                fill2.Size=UDim2.new(iv/255,0,1,0)
+                thumb2.Position=UDim2.new(iv/255,-t2Sz/2,0.5,-t2Sz/2)
+                vLbl2.Text=tostring(iv)
+                RefreshAll()
+            end
+            local function P2V2(ax)
+                return 255*math.clamp((ax-track2.AbsolutePosition.X)/track2.AbsoluteSize.X,0,1)
+            end
+            SCV(Flags[flag][colorKey])
+
+            track2.InputBegan:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+                    drag2=true; SCV(P2V2(i.Position.X)) end end)
+            thumb2.InputBegan:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+                    drag2=true end end)
+            UIS.InputChanged:Connect(function(i)
+                if drag2 and (i.UserInputType==Enum.UserInputType.MouseMovement or i.UserInputType==Enum.UserInputType.Touch) then
+                    SCV(P2V2(i.Position.X)) end end)
+            UIS.InputEnded:Connect(function(i)
+                if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+                    drag2=false end end)
+
+            return yp+slH+4
+        end
+
+        bodyY=ColorSlider("R","r",bodyY,Color3.fromRGB(200,50,50))
+        bodyY=ColorSlider("G","g",bodyY,Color3.fromRGB(50,185,75))
+        bodyY=ColorSlider("B","b",bodyY,Color3.fromRGB(55,115,220))
+
+        cX.MouseButton1Click:Connect(function()
+            local fv=Flags[flag]
+            Toast("Color Picker", string.format("Color set: #%02X%02X%02X",fv.r,fv.g,fv.b), "ok")
+            pop:Destroy()
+        end)
+    end)
+
+    return yOff+rowGap
+end
+
+-- ════════════════════════════════════════════════════════
+-- BIND  (click to capture next keypress)
+-- flag      — key in Flags (stores KeyCode name string)
+-- callback  — function(KeyCode) called when bind changes
+--
+-- FIX: Escape cancels waiting without saving.
+-- FIX: Sets _anyBindWaiting so the menu toggle is suppressed.
+-- FIX: Right-click resets bind to "None".
+-- ════════════════════════════════════════════════════════
 local function MakeBind(parent, text, yOff, flag, callback)
     Flags[flag]=Flags[flag] or "None"
     local bH=isMobile and 30 or 26
@@ -969,17 +1263,22 @@ local function MakeBind(parent, text, yOff, flag, callback)
 
     local cbZ=Btn(row,UDim2.new(1,0,1,0),UDim2.new(0,0,0,0),C.bg0); cbZ.BackgroundTransparency=1
 
+    -- Hover highlight
     cbZ.MouseEnter:Connect(function()
         TweenS:Create(row,TweenInfo.new(0.08),{BackgroundTransparency=0.82}):Play()
     end)
     cbZ.MouseLeave:Connect(function()
         TweenS:Create(row,TweenInfo.new(0.12),{BackgroundTransparency=1}):Play()
     end)
+
+    -- Left-click: start waiting
     cbZ.MouseButton1Click:Connect(function()
         if waiting then return end
         waiting=true; _anyBindWaiting=true
         bL.Text="..."; bindF.BackgroundColor3=C.acc
     end)
+
+    -- Right-click: clear bind to None
     cbZ.MouseButton2Click:Connect(function()
         if waiting then CancelWait() end
         Flags[flag]="None"; bL.Text="None"
@@ -991,7 +1290,7 @@ local function MakeBind(parent, text, yOff, flag, callback)
         if not waiting then return end
         if inp.UserInputType == Enum.UserInputType.Keyboard then
             if inp.KeyCode == Enum.KeyCode.Escape then
-                CancelWait()
+                CancelWait()  -- Escape cancels without saving
             else
                 CommitBind(inp.KeyCode)
             end
@@ -1002,645 +1301,59 @@ local function MakeBind(parent, text, yOff, flag, callback)
 end
 
 -- ════════════════════════════════════════════════════════
--- AUTOFARM STATE
+-- TAB 1 — ELEMENTS  (demo of every component)
+-- Replace or extend with your own entries below.
 -- ════════════════════════════════════════════════════════
-local AF_Enabled       = false
-local AF_Distance      = 20
-local AF_Position      = "Above"
-local AF_SwapAbility = false  -- cycle Slot1-5 when all Z/X/C/G/E are on cooldown
-local PP_Enabled     = false  -- ProximityPrompt auto-trigger
-local AF_LastVTime   = 0      -- tick() of last V-skill fire (60 s timer)
-local AF_CurrentSlot = 1      -- active loadout slot for swap cycling (1-5)
-
--- ── Helpers ──────────────────────────────────────────────
-
-local function GetInteract()
-    return RS:FindFirstChild("Assets")
-        and RS.Assets:FindFirstChild("Remotes")
-        and RS.Assets.Remotes:FindFirstChild("Interact")
-end
-
--- Read ability name from HUD (used in every FireServer call).
--- Converts all-caps text to title case: "DRAGON SLASH" → "Dragon Slash"
-local function GetAbilityName()
-    local ok, v = pcall(function()
-        return lp.PlayerGui.HUD.Main.Ultimate.AbilityName.Text
-    end)
-    if not ok or not v or v == "" then return "Spin" end
-    -- Title-case every word (handles single and multi-word names)
-    return (v:gsub("(%a)([%a']*)", function(first, rest)
-        return first:upper() .. rest:lower()
-    end))
-end
-
--- Read gadget name from HUD: "INFINITY [E]" → "Infinity"
-local function GetGadgetName()
-    local ok, v = pcall(function()
-        return lp.PlayerGui.HUD.Main.Profile.Gadget.GadgetName.Text
-    end)
-    if not ok or not v or v == "" then return "Infinity" end
-    local name = v:match("^(.-)%s+%[") or v  -- everything before " ["
-    name = name:gsub("%s+$", "")             -- trim trailing spaces
-    if #name == 0 then return "Infinity" end
-    return name:sub(1,1):upper() .. name:sub(2):lower()
-end
-
--- ── CD-ready reference sizes (strict equality as requested) ───────────────
--- Z / X / C  (AbilityHotbar.KEY.CD.Size when no cooldown)
-local CD_NONE = UDim2.new(1.04299998, -6, -0.800000012, -6)
--- G  (Ultimate.Progress.Fill.Size when ult ready)
-local ULT_READY = UDim2.new(0.930000007, 0, 0.908999979, 0)
--- E  (Profile.Gadget.Fill.Size when gadget ready)
-local GADGET_READY = UDim2.new(0.944198668, 0, 1.01564765, 0)
-
-local function AbilityReady(key)   -- key = "Z" | "X" | "C"
-    local ok, sz = pcall(function()
-        return lp.PlayerGui.HUD.Main.AbilityHotbar[key].CD.Size
-    end)
-    return ok and sz == CD_NONE
-end
-
-local function UltReady()
-    local ok, sz = pcall(function()
-        return lp.PlayerGui.HUD.Main.Ultimate.Progress.Fill.Size
-    end)
-    return ok and sz == ULT_READY
-end
-
-local function GadgetReady()
-    local ok, sz = pcall(function()
-        return lp.PlayerGui.HUD.Main.Profile.Gadget.Fill.Size
-    end)
-    return ok and sz == GADGET_READY
-end
-
--- Returns true when at least one of Z / X / C / G / E is ready
-local function AnySkillReady()
-    return AbilityReady("Z") or AbilityReady("X") or AbilityReady("C")
-        or UltReady() or GadgetReady()
-end
-
--- Fire one ability on all five slots back-to-back (Slot1 → Slot2 → Slot3 → Slot4 → Slot5)
-local function FireAbility(ev, index, name)
-    pcall(function() ev:FireServer("Ability", index, "Slot1", name, "Began") end)
-    pcall(function() ev:FireServer("Ability", index, "Slot2", name, "Began") end)
-    pcall(function() ev:FireServer("Ability", index, "Slot3", name, "Began") end)
-    pcall(function() ev:FireServer("Ability", index, "Slot4", name, "Began") end)
-    pcall(function() ev:FireServer("Ability", index, "Slot5", name, "Began") end)
-end
-
--- Fire whichever of Z / X / C / G / E are currently ready.
--- Returns true if at least one was fired.
-local function FireReadySkills()
-    local ev = GetInteract()
-    if not ev then return false end
-    local fired = false
-
-    if AbilityReady("Z") then
-        local name = GetAbilityName()
-        FireAbility(ev, 1, name)
-        fired = true
-    end
-    if AbilityReady("X") then
-        local name = GetAbilityName()
-        FireAbility(ev, 2, name)
-        fired = true
-    end
-    if AbilityReady("C") then
-        local name = GetAbilityName()
-        FireAbility(ev, 3, name)
-        fired = true
-    end
-    if UltReady() then
-        local name = GetAbilityName()
-        FireAbility(ev, 5, name)
-        fired = true
-    end
-    if GadgetReady() then
-        pcall(function() ev:FireServer("Gadget", "Slot1", GetGadgetName(), "Began") end)
-        fired = true
-    end
-
-    return fired
-end
-
--- Equip a loadout slot: FuncInteract remote first, keypress fallback
-local VK_SLOTS = {0x31, 0x32, 0x33, 0x34, 0x35}  -- keys 1-5 (kept for PP + slot fallback)
-
-local function PressKey(vk)  -- still used for ProximityPrompt E-key fallback
-    if keypress  then pcall(function() keypress(vk)  end) end
-    task.wait(0.04)
-    if keyrelease then pcall(function() keyrelease(vk) end) end
-end
-
-local function GetFuncInteract()
-    return RS:FindFirstChild("Assets")
-        and RS.Assets:FindFirstChild("Requests")
-        and RS.Assets.Requests:FindFirstChild("FuncInteract")
-end
-
-local function EquipSlot(n)
-    local fi = GetFuncInteract()
-    if fi then
-        pcall(function() fi:InvokeServer("EquipAbility", "Slot" .. n) end)
-    elseif keypress and keyrelease then
-        PressKey(VK_SLOTS[n])
-    end
-end
-
-local function FireGates()
-    task.spawn(function()
-        local ev = GetInteract()
-        if not ev then return end
-        local gFolder = workspace:FindFirstChild("Map")
-            and workspace.Map:FindFirstChild("Gates")
-        if not gFolder then return end
-        -- Fire all gates simultaneously (no delay)
-        for _, gate in ipairs(gFolder:GetChildren()) do
-            pcall(function() ev:FireServer("GateHit", gate) end)
-        end
-    end)
-end
-
--- Find the first NPC in workspace.Zombies that has a HumanoidRootPart.
--- These NPCs use AnimationController + Config, not Humanoid.
--- When killed they are removed from the folder, so presence = alive.
-local function FindTarget()
-    local folder = workspace:FindFirstChild("Zombies")
-    if not folder then return nil end
-    for _, child in ipairs(folder:GetChildren()) do
-        if child:IsA("Model") then
-            local hrp = child:FindFirstChild("HumanoidRootPart")
-            if not hrp then continue end
-            -- Skip dead NPCs: Config.Health is a NumberValue; 0 means dead / ragdolling
-            local hp = child:FindFirstChild("Config")
-                and child.Config:FindFirstChild("Health")
-            if hp and hp.Value <= 0 then continue end
-            return {hrp = hrp, model = child}
-        end
-    end
-    return nil
-end
-
-local AF_ShieldActive  = false  -- true while shield pause is running
-local AF_ShieldEndTime = 0      -- tick() when shield pause expires
-
-local function DoTeleport(target, distOverride)
-    local char = lp.Character
-    if not char then return end
-    local myHRP = char:FindFirstChild("HumanoidRootPart")
-    if not myHRP then return end
-
-    local dist   = distOverride or AF_Distance
-    local npcPos = target.hrp.Position
-    -- Sanity-check: if NPC was launched into the void after dying, skip this frame
-    if npcPos.Magnitude > 5000 then return end
-    local offset
-    if AF_Position == "Above" then
-        offset = Vector3.new(0, dist, 0)
-    elseif AF_Position == "Below" then
-        offset = Vector3.new(0, -dist, 0)
-    elseif AF_Position == "Behind" then
-        offset = target.hrp.CFrame.LookVector * dist
-    else
-        offset = Vector3.new(0, dist, 0)
-    end
-
-    myHRP.CFrame = CFrame.new(npcPos + offset, npcPos)
-end
-
--- ════════════════════════════════════════════════════════
--- AUTOFARM LOOPS + PROXIMITYPROMPT
--- Only start in game places — never in the main lobby.
--- ════════════════════════════════════════════════════════
-if not isMainPlace then
-
-if lp then
-    lp.CharacterAdded:Connect(function()
-        task.wait(5)
-        if AF_Enabled then FireGates() end
-    end)
-end
-
--- Gates every 10 seconds
-task.spawn(function()
-    local t = 0
-    while true do
-        task.wait(1)
-        if AF_Enabled then
-            t += 1
-            if t >= 10 then t = 0; FireGates() end
-        else
-            t = 0
-        end
-    end
-end)
-
--- Current target shared between Heartbeat and skill loop
-local AF_CurrentTarget = nil
-
--- Returns true if the player currently has a Shield effect on their character
-local function HasShield()
-    local char = lp.Character
-    if not char then return false end
-    -- Check direct children first, then one level deep
-    if char:FindFirstChild("Shield") then return true end
-    for _, child in ipairs(char:GetChildren()) do
-        if child.Name == "Shield" then return true end
-        if child:IsA("Model") or child:IsA("Folder") then
-            if child:FindFirstChild("Shield") then return true end
-        end
-    end
-    return false
-end
-
--- Heartbeat: every frame — shield check, cooldown distance, teleport + face NPC
-RunService.Heartbeat:Connect(function()
-    if not AF_Enabled then return end
-    if not AF_CurrentTarget then return end
-
-    local hrp = AF_CurrentTarget.hrp
-    if not hrp or not hrp.Parent then
-        AF_CurrentTarget = nil
-        return
-    end
-
-    -- ── Shield pause ──────────────────────────────────────
-    if HasShield() and not AF_ShieldActive then
-        -- Shield just appeared: start 2-second pause, hold W
-        AF_ShieldActive  = true
-        AF_ShieldEndTime = tick() + 2
-    end
-
-    if AF_ShieldActive then
-        -- Keep walking forward (simulates holding W)
-        local char = lp.Character
-        local hum  = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum:Move(Vector3.new(0, 0, -1), true)
-        end
-
-        if tick() < AF_ShieldEndTime then
-            return -- skip teleport while paused
-        else
-            -- 2 seconds passed — resume autofarm
-            AF_ShieldActive = false
-            if hum then hum:Move(Vector3.new(0, 0, 0), false) end
-        end
-    end
-
-    pcall(function() DoTeleport(AF_CurrentTarget, AF_Distance) end)
-end)
-
--- Main autofarm loop (0.1 s tick)
--- • Skills  — fires Z/X/C/G/E via RemoteEvent as soon as HUD CD clears
--- • Swap    — if ALL of Z/X/C/G/E are on CD and AF_SwapAbility is ON, cycle slots 1→2→3→4→5→1
--- • V       — fires every 60 s independently of everything else
--- • Config  — pauses skill firing while the Config tab (index 2) is open
--- • Target  — FindTarget() every tick so Heartbeat always has a fresh position
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        if not AF_Enabled then
-            AF_CurrentTarget = nil
-            continue
-        end
-
-        AF_CurrentTarget = FindTarget()  -- used by Heartbeat for teleport
-
-        -- Pause skill firing while the Config tab is open
-        if ActiveTab == 2 then continue end
-
-        -- ── V skill: independent 60-second timer ─────────────────
-        local now = tick()
-        if now - AF_LastVTime >= 60 then
-            AF_LastVTime = now
-            task.spawn(function()
-                local ev = GetInteract()
-                if ev then
-                    local name = GetAbilityName()
-                    FireAbility(ev, 4, name)
-                end
-            end)
-        end
-
-        -- ── Z / X / C / G / E skills ──────────────────────────────
-        FireReadySkills()
-
-        -- ── Swap Ability: cycle slot if ALL skills on CD ──────────
-        if AF_SwapAbility and not AnySkillReady() then
-            AF_CurrentSlot = (AF_CurrentSlot % 5) + 1
-            EquipSlot(AF_CurrentSlot)
-            -- Check CD immediately after equipping (no extra wait)
-        end
-    end
-end)
-
--- ════════════════════════════════════════════════════════
--- PROXIMITYPROMPT AUTO-TRIGGER
--- ════════════════════════════════════════════════════════
-
--- Returns the world position of any ProximityPrompt's parent (BasePart / Model / Attachment)
-local function GetPromptPos(prompt)
-    local pos
-    pcall(function()
-        local p = prompt.Parent
-        if p:IsA("Attachment") then
-            pos = p.WorldPosition
-        elseif p:IsA("BasePart") then
-            pos = p.Position
-        elseif p:IsA("Model") then
-            local bp = p.PrimaryPart or p:FindFirstChildWhichIsA("BasePart")
-            pos = bp and bp.Position or p:GetPivot().Position
-        end
-    end)
-    return pos
-end
-
-local function TriggerPrompt(prompt)
-    local char = lp and lp.Character
-    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local pos = GetPromptPos(prompt)
-    if not pos then return end
-
-    if fireproximityprompt then
-        -- Executor supports native trigger: teleport within range, then fire directly
-        pcall(function() hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0)) end)
-        task.wait(0.08)
-        pcall(function() fireproximityprompt(prompt) end)
-    else
-        -- Fallback: teleport + cut HoldDuration to 0.1s + lock camera + hold E for 0.5s
-        local origHold    = prompt.HoldDuration
-        local cam         = workspace.CurrentCamera
-        local origCamType = cam.CameraType
-
-        pcall(function()
-            hrp.CFrame          = CFrame.new(pos + Vector3.new(0, 3, 0))
-            task.wait(0.08)
-            prompt.HoldDuration = 0.1
-            cam.CameraType      = Enum.CameraType.Scriptable
-            cam.CFrame          = CFrame.new(hrp.Position, pos)
-        end)
-
-        -- Hold E (Windows virtual-key 0x45) for 0.5 s
-        if keypress and keyrelease then
-            pcall(function() keypress(0x45) end)
-            task.wait(0.5)
-            pcall(function() keyrelease(0x45) end)
-        else
-            task.wait(0.5)
-        end
-
-        -- Restore original values
-        pcall(function()
-            prompt.HoldDuration = origHold
-            cam.CameraType      = origCamType
-        end)
-    end
-
-    task.wait(0.15)  -- small gap between consecutive prompts
-end
-
--- Loop: every 5 s collect every enabled ProximityPrompt in workspace and trigger each one
-task.spawn(function()
-    while true do
-        task.wait(5)
-        if not PP_Enabled then continue end
-
-        local prompts = {}
-        for _, v in ipairs(workspace:GetDescendants()) do
-            if v:IsA("ProximityPrompt") and v.Enabled then
-                table.insert(prompts, v)
-            end
-        end
-
-        for _, prompt in ipairs(prompts) do
-            if not PP_Enabled then break end
-            pcall(function() TriggerPrompt(prompt) end)
-        end
-
-    end
-end)
-
-end -- if not isMainPlace  (autofarm + PP loops)
-
--- ════════════════════════════════════════════════════════
--- TAB 1 — AUTOFARM  (non-lobby place)
--- ════════════════════════════════════════════════════════
-local P1 = MakePage(); local S1 = MakeScroll(P1)
-local Col1 = Frame(S1,UDim2.new(1,-16,0,1),UDim2.new(0,8,0,0),C.bg0)
+local P1=MakePage(); local S1=MakeScroll(P1)
+local Col1=Frame(S1,UDim2.new(1,-16,0,1),UDim2.new(0,8,0,0),C.bg0)
 Col1.BackgroundTransparency=1; Col1.AutomaticSize=Enum.AutomaticSize.Y
 
-if not isMainPlace then
-    local y1 = 8
+local y1=8
 
-    y1 = MakeSection(Col1, "Autofarm", y1)
-    y1 = MakeToggle(Col1, "Enable Autofarm", y1, "AutofarmEnabled", function(v)
-        AF_Enabled = v
-        if v then FireGates(); Toast("Autofarm","Started — Gates fired","ok")
-        else Toast("Autofarm","Stopped","err") end
-    end)
-    y1 = MakeToggle(Col1, "Swap Ability", y1, "AutofarmSwapAbility", function(v)
-        AF_SwapAbility = v
-        AF_CurrentSlot = 1  -- reset slot pointer when toggling
-        Toast("Autofarm", v and "Swap Ability: ON" or "Swap Ability: OFF", v and "ok" or "warn")
-    end)
-    y1 = MakeToggle(Col1, "Auto ProximityPrompts", y1, "AutoProxPrompt", function(v)
-        PP_Enabled = v
-        Toast("Autofarm", v and "ProximityPrompts: ON" or "ProximityPrompts: OFF", v and "ok" or "warn")
-    end)
-    y1 = MakeSection(Col1, "Settings", y1)
-    y1 = MakeLabel(Col1, "Gates every 10s. On respawn: 5s delay then gates.", y1, C.txt3)
-    y1 = MakeSlider(Col1, "Distance", y1, "AutofarmDistance", 10, 100, "%d", function(v)
-        AF_Distance = v
-    end)
-    AF_Distance = Flags["AutofarmDistance"] or 20
-    y1 = MakeSelect(Col1, "Farm Position", y1, {"Above","Below","Behind"}, function(v)
-        AF_Position = v
-        Toast("Autofarm","Position: "..v,"ok")
-    end)
+y1=MakeSection(Col1,"Buttons",y1)
+y1=MakeActionBtn(Col1,"Test Button",y1,function()
+    Toast("Button","Test button pressed","ok")
+end)
 
-    y1 = MakeSection(Col1, "Manual", y1)
-    y1 = MakeActionBtn(Col1, "Fire Gates Now", y1, function()
-        FireGates(); Toast("Gates","Gate remotes fired","ok")
-    end)
-    MakeLabel(Col1, "Ability name read from LocalPlayer.Data.ExclusiveAbilities", y1, C.txt3)
-end
+y1=MakeSection(Col1,"Labels",y1)
+local _statusLbl
+y1,_statusLbl=MakeLabel(Col1,"Status: idle — update via _statusLbl.Text",y1)
 
--- ════════════════════════════════════════════════════════
--- TAB 1 — MAIN  (lobby place 140409475718339)
--- ════════════════════════════════════════════════════════
-if isMainPlace then
+y1=MakeSection(Col1,"Toggles",y1)
+y1=MakeToggle(Col1,"Example Toggle",y1,"ExToggle",function(v)
+    Toast("Toggle","Toggle is now: "..tostring(v), v and "ok" or "err")
+    _statusLbl.Text = "Toggle: "..tostring(v)
+end)
 
-    -- ── AutoStart state ──────────────────────────────────
-    local AS_Enabled     = false
-    local AS_Mode        = "Infinity"
-    local AS_Map         = "Shibuya"
-    local AS_Difficulty  = "Normal"
-    local AS_FriendsOnly = false
-    local AS_MaxPlayers  = 4
+y1=MakeSection(Col1,"Sliders",y1)
+y1=MakeSlider(Col1,"Integer Slider",y1,"TestSlider",0,100,"%d",function(v)
+    Toast("Slider","Value: "..tostring(v),"ok")
+end)
+y1=MakeSlider(Col1,"Float Slider",y1,"TestSliderF",0,1,"%.2f",function(v)
+    Toast("Slider","Float: "..string.format("%.2f",v),"ok")
+end)
 
-    local MapOptions = {
-        Infinity         = {"Shibuya", "Impel Down"},
-        Raid             = {"Infinity Castle", "Shadow Garden", "The Wild West"},
-        ["Titan Defense"]= {"Trost"},
-        Survival         = {"Shibuya", "Impel Down"},
-    }
+y1=MakeSection(Col1,"Select",y1)
+y1=MakeSelect(Col1,"Test Select",y1,{"Option A","Option B","Option C","Option D"},function(v)
+    Toast("Select","Selected: "..v,"ok")
+end)
 
-    -- Dynamic map select: options re-evaluated from AS_Mode at popup time
-    local AS_MapLbl
-    local function MakeDynMapSelect(parent, yOff)
-        local bH = isMobile and 30 or 26
-        local b  = Btn(parent, UDim2.new(1,-32,0,bH), UDim2.new(0,16,0,yOff), C.bg3, 4)
-        Stroke(b, C.brd2, 1)
-        AS_MapLbl = Lbl(b,"Map  :  "..AS_Map, isMobile and 11 or 11, C.txt, Enum.Font.GothamMedium)
-        AS_MapLbl.Size=UDim2.new(1,-28,1,0); AS_MapLbl.Position=UDim2.new(0,10,0,0)
-        Lbl(b,"v",isMobile and 10 or 9,C.txt2,Enum.Font.GothamBold,Enum.TextXAlignment.Right).Size=UDim2.new(0,20,1,0)
-        b.MouseButton1Click:Connect(function()
-            local opts = MapOptions[AS_Mode] or {"Shibuya"}
-            if not table.find(opts, AS_Map) then
-                AS_Map = opts[1]; AS_MapLbl.Text = "Map  :  "..AS_Map
-            end
-            local popW  = isMobile and math.min(260,workspace.CurrentCamera.ViewportSize.X-20) or 240
-            local itemH = isMobile and 36 or 30
-            local popH  = math.min(#opts*itemH+16, 260)
-            local pop   = Frame(GUI,UDim2.new(0,popW,0,popH),UDim2.new(0,0,0,0),C.bg0,6)
-            Stroke(pop,C.brd2,1); pop.ZIndex=110; pop.ClipsDescendants=true
-            local ap=b.AbsolutePosition; local vp=workspace.CurrentCamera.ViewportSize
-            local px=math.clamp(ap.X,4,vp.X-popW-4); local py=ap.Y+b.AbsoluteSize.Y+4
-            if py+popH>vp.Y-4 then py=ap.Y-popH-4 end
-            pop.Position=UDim2.new(0,px,0,py)
-            local sc=MakeScroll(pop); sc.Size=UDim2.new(1,-4,1,-4); sc.Position=UDim2.new(0,2,0,2)
-            local ov  -- pre-declared so item handlers can reference it
-            for i,opt in ipairs(opts) do
-                local sel=opt==AS_Map
-                local ib=Btn(sc,UDim2.new(1,0,0,itemH),UDim2.new(0,0,0,(i-1)*itemH),sel and C.bg4 or C.bg3)
-                Stroke(ib,C.brd,1)
-                local dSz=isMobile and 10 or 8
-                local dF=Frame(ib,UDim2.new(0,dSz,0,dSz),UDim2.new(0,isMobile and 12 or 10,0.5,-dSz/2),sel and C.acc or C.bg4,dSz/2)
-                Stroke(dF,C.brd2,1)
-                local iL=Lbl(ib,opt,isMobile and 12 or 11,sel and C.white or C.txt,Enum.Font.GothamMedium)
-                iL.Size=UDim2.new(1,-(dSz+24),1,0); iL.Position=UDim2.new(0,dSz+18,0,0)
-                ib.MouseButton1Click:Connect(function()
-                    AS_Map=opt; AS_MapLbl.Text="Map  :  "..AS_Map
-                    pop:Destroy()
-                    if ov then ov:Destroy() end
-                end)
-            end
-            ov=Btn(GUI,UDim2.new(1,0,1,0),UDim2.new(0,0,0,0),C.bg0)
-            ov.BackgroundTransparency=1; ov.ZIndex=109
-            ov.MouseButton1Click:Connect(function() pop:Destroy(); ov:Destroy() end)
-        end)
-        return yOff+(isMobile and 38 or 34)
-    end
+y1=MakeSection(Col1,"Multi Select",y1)
+y1=MakeMultiSelect(Col1,"Multi Test",y1,{"Item 1","Item 2","Item 3","Item 4","Item 5"},function(vals)
+    local s=table.concat(vals,", ")
+    Toast("Multi",s~="" and s or "None selected","ok")
+end)
 
-    -- ── AutoStart loop ───────────────────────────────────
-    -- Constantly spams CreateMatch when AS_Enabled is on.
-    -- Tries every platform in workspace.Platforms until one accepts.
-    task.spawn(function()
-        while true do
-            task.wait(0.5)
-            if not AS_Enabled then continue end
+y1=MakeSection(Col1,"Color Picker",y1)
+y1=MakeColorPicker(Col1,"Color Test",y1,"ColorTest",function(r,g,b)
+    -- live update callback
+end)
 
-            local ev = RS:FindFirstChild("Assets")
-                and RS.Assets:FindFirstChild("Remotes")
-                and RS.Assets.Remotes:FindFirstChild("Interact")
-            if not ev then continue end
-
-            local ok, platforms = pcall(function()
-                return workspace.Platforms:GetChildren()
-            end)
-            if not ok or not platforms then continue end
-
-            for _, platform in ipairs(platforms) do
-                pcall(function()
-                    ev:FireServer("CreateMatch", platform, {
-                        IsTaken     = true,
-                        Difficulty  = AS_Mode == "Survival" and AS_Difficulty or "Normal",
-                        Map         = AS_Map,
-                        Mode        = AS_Mode,
-                        FriendsOnly = AS_FriendsOnly,
-                        MaxPlayers  = AS_MaxPlayers,
-                    })
-                end)
-            end
-        end
-    end)
-
-    -- ── Main tab UI ──────────────────────────────────────
-    local y1 = 8
-
-    y1 = MakeSection(Col1, "AutoStart", y1)
-    y1 = MakeToggle(Col1, "Enable AutoStart", y1, "AutoStartEnabled", function(v)
-        AS_Enabled = v
-        Toast("AutoStart", v and "Enabled" or "Disabled", v and "ok" or "err")
-    end)
-
-    y1 = MakeSection(Col1, "Match Settings", y1)
-
-    y1 = MakeSelect(Col1, "Mode", y1, {"Infinity","Raid","Titan Defense","Survival"}, function(v)
-        AS_Mode = v
-        -- Reset map to first valid option for this mode
-        local opts = MapOptions[v] or {}
-        if #opts > 0 and not table.find(opts, AS_Map) then
-            AS_Map = opts[1]
-            if AS_MapLbl then AS_MapLbl.Text = "Map  :  "..AS_Map end
-        end
-        Toast("AutoStart","Mode: "..v,"ok")
-    end, "AS_Mode")
-
-    y1 = MakeDynMapSelect(Col1, y1)
-
-    -- Difficulty row (always visible; only used when Mode = Survival)
-    local _, diffLbl
-    y1, diffLbl = MakeLabel(Col1, "Difficulty (Survival only):", y1, C.txt3)
-    y1 = MakeSelect(Col1, "Difficulty", y1, {"Normal","Hard","Nightmare","Gravewalker"}, function(v)
-        AS_Difficulty = v
-        Toast("AutoStart","Difficulty: "..v,"ok")
-    end, "AS_Difficulty")
-
-    y1 = MakeSelect(Col1, "Friends Only", y1, {"False","True"}, function(v)
-        AS_FriendsOnly = v == "True"
-        Toast("AutoStart","Friends Only: "..v,"ok")
-    end, "AS_FriendsOnly")
-
-    y1 = MakeSelect(Col1, "Max Players", y1, {"1","2","3","4","5","6"}, function(v)
-        AS_MaxPlayers = tonumber(v)
-        Toast("AutoStart","Max Players: "..v,"ok")
-    end, "AS_MaxPlayers")
-    AS_MaxPlayers = 4
-
-    y1 = MakeSection(Col1, "Codes", y1)
-    y1 = MakeActionBtn(Col1, "Claim All Codes", y1, function()
-        local fi = RS:FindFirstChild("Assets")
-            and RS.Assets:FindFirstChild("Requests")
-            and RS.Assets.Requests:FindFirstChild("FuncInteract")
-        if not fi then
-            Toast("Codes", "FuncInteract not found", "err")
-            return
-        end
-        local codes = {"SBRUPDATE", "NEWGAMEMODE", "BEYONDTHEWALLS", "5KFOLLOWERS!"}
-        local ok_count, fail_count = 0, 0
-        task.spawn(function()
-            for _, code in ipairs(codes) do
-                local s, e = pcall(function()
-                    fi:InvokeServer("UseCode", code)
-                end)
-                if s then ok_count += 1 else fail_count += 1 end
-                task.wait(0.3)
-            end
-            if fail_count == 0 then
-                Toast("Codes", "All " .. ok_count .. " codes claimed!", "ok")
-            else
-                Toast("Codes", ok_count .. " claimed, " .. fail_count .. " failed", "warn")
-            end
-        end)
-        Toast("Codes", "Claiming codes...", "ok")
-    end)
-
-end
+y1=MakeSection(Col1,"Keybinds",y1)
+y1=MakeLabel(Col1,"Left-click to set  ·  Right-click to clear  ·  Esc to cancel",y1,C.txt3)
+y1=MakeBind(Col1,"Test Bind",y1,"TestBind",function(key)
+    Toast("Bind","Bind set: "..key.Name,"ok")
+end)
 
 -- ════════════════════════════════════════════════════════
 -- TAB 2 — CONFIG
@@ -1746,12 +1459,12 @@ Frame(Card,UDim2.new(1,0,0,2),UDim2.new(0,0,0,0),C.acc)
 local CLogo=Lbl(Card,'<font color="#D73737">ZXC</font>HUB',isMobile and 24 or 26,C.white,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
 CLogo.Size=UDim2.new(1,0,0,42); CLogo.Position=UDim2.new(0,0,0,14); CLogo.RichText=true
 
-local CVer=Lbl(Card,"v2.3  |  Anime Apocalypse",isMobile and 11 or 11,C.txt2,Enum.Font.GothamMedium,Enum.TextXAlignment.Center)
+local CVer=Lbl(Card,"v2.3  |  Universal GUI Template",isMobile and 11 or 11,C.txt2,Enum.Font.GothamMedium,Enum.TextXAlignment.Center)
 CVer.Size=UDim2.new(1,0,0,16); CVer.Position=UDim2.new(0,0,0,58)
 
 Frame(Card,UDim2.new(0.5,0,0,1),UDim2.new(0.25,0,0,84),C.brd)
 
-local CDesc=Lbl(Card,"Built by the ZXCHUB team\nAutofarm  |  Config system  |  Themes",
+local CDesc=Lbl(Card,"Built by the ZXCHUB team\nFull mobile support  |  Config system  |  Themes",
     isMobile and 11 or 12,C.txt,Enum.Font.Gotham,Enum.TextXAlignment.Center)
 CDesc.Size=UDim2.new(1,-24,0,50); CDesc.Position=UDim2.new(0,12,0,92); CDesc.TextWrapped=true
 
@@ -1772,7 +1485,7 @@ DC.MouseButton1Click:Connect(function()
 end)
 
 -- ════════════════════════════════════════════════════════
--- TAB 4 — SETTINGS  (gear icon)
+-- TAB 4 — SETTINGS  (opened via gear icon, not in tab bar)
 -- ════════════════════════════════════════════════════════
 local P7=MakePage(); local S7=MakeScroll(P7)
 
@@ -1870,14 +1583,17 @@ local function TryLoadChar()
     for _,s in ipairs(clone:GetDescendants()) do
         if s:IsA("BaseScript") then s:Destroy() end
     end
+    -- Anchor all parts so they don't fall after scripts are removed
     for _,p in ipairs(clone:GetDescendants()) do
         if p:IsA("BasePart") then p.Anchored=true; p.CastShadow=false end
     end
     clone.Parent=VP
+    -- Move to world origin so camera placement is always predictable
     pcall(function() clone:PivotTo(CFrame.new(0,0,0)) end)
     local cam=Instance.new("Camera",VP); VP.CurrentCamera=cam
     local head=clone:FindFirstChild("Head")
     local target=head and head.Position or Vector3.new(0,1.5,0)
+    -- Camera slightly above + in front, framing the face
     cam.CFrame=CFrame.new(target+Vector3.new(0,0.3,2.6), target+Vector3.new(0,0.05,0))
 end
 
@@ -1983,8 +1699,8 @@ end
 
 local function ShowFnPopup()
     local vp=workspace.CurrentCamera.ViewportSize
-    local popW=isMobile and math.clamp(vp.X-16,260,400) or 430
-    local popH=isMobile and math.clamp(vp.Y*0.85,300,520) or 400
+    local popW=isMobile and math.clamp(vp.X-16, 260, 400) or 430
+    local popH=isMobile and math.clamp(vp.Y*0.85, 300, 520) or 400
 
     local pop=Frame(GUI,UDim2.new(0,popW,0,popH),UDim2.new(0.5,-popW/2,0.5,-popH/2),C.bg0,8)
     pop.ZIndex=120; Stroke(pop,C.brd2,1); pop.ClipsDescendants=true
@@ -1994,7 +1710,7 @@ local function ShowFnPopup()
     Frame(fHead,UDim2.new(1,0,0,2),UDim2.new(0,0,1,-2),C.acc)
     local fhLbl=Lbl(fHead,
         "Functions  —  "..supported.."/"..#AllFunctions.." supported",
-        isMobile and 11 or 12,C.white,Enum.Font.GothamBold,Enum.TextXAlignment.Center)
+        isMobile and 11 or 12, C.white, Enum.Font.GothamBold, Enum.TextXAlignment.Center)
     fhLbl.Size=UDim2.new(1,-44,1,0); fhLbl.TextTruncate=Enum.TextTruncate.AtEnd
 
     local fClose=Btn(fHead,
@@ -2016,6 +1732,7 @@ local function ShowFnPopup()
     end
 
     local yp=0
+    -- entH increased to fit the extra "Used by:" row
     local entH=isMobile and 80 or 72
     local catH2=isMobile and 24 or 20
 
@@ -2046,11 +1763,13 @@ local function ShowFnPopup()
                 fn.supported and C.grn or C.acc,
                 Enum.Font.GothamBold,Enum.TextXAlignment.Center)
 
+            -- Description
             local dL=Lbl(eF,fn.desc,isMobile and 10 or 9,C.txt2,Enum.Font.Gotham)
             dL.Size=UDim2.new(1,-16,0,isMobile and 20 or 18)
             dL.Position=UDim2.new(0,10,0,isMobile and 28 or 25)
             dL.TextXAlignment=Enum.TextXAlignment.Left; dL.TextWrapped=true
 
+            -- "Used by" row — shows which features depend on this function
             local usedStr = (fn.features and fn.features~="") and fn.features or "—"
             local uL=Lbl(eF,"Used by:  "..usedStr,isMobile and 9 or 9,C.txt3,Enum.Font.Gotham)
             uL.Size=UDim2.new(1,-16,0,isMobile and 16 or 14)
@@ -2071,13 +1790,15 @@ ys2=MakeActionBtn(SC2,"Show all "..#AllFunctions.." functions",ys2,ShowFnPopup)
 local autoName=SafeRead(ConfigManager.AutoLoadFile) or ""
 if autoName~="" then
     local ok,msg=ConfigManager:Load(autoName)
-    if ok then
-        Toast("Auto-Load","Loaded: "..autoName,"ok")
-        AF_Enabled = Flags["AutofarmEnabled"] or false
-        AF_Distance = Flags["AutofarmDistance"] or 20
-    end
+    if ok then Toast("Auto-Load","Loaded: "..autoName,"ok") end
 end
 
 SetTab(1)
 ShowCursor()
-Toast("ZXCHUB","Anime Apocalypse loaded","ok")
+Toast("ZXCHUB","Menu loaded  v2.3","ok")
+
+if #UnsupportedFunctions>0 then
+    task.delay(1.8,function()
+        Toast("Warning",#UnsupportedFunctions.." function(s) unsupported","warn")
+    end)
+end
